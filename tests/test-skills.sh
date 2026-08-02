@@ -96,4 +96,15 @@ else
   PASSES=$((PASSES + 1))
 fi
 
+# --- merge: never squash, always check CI, always chain into cleanup ---
+merge="$SKILLS/merge/SKILL.md"
+assert_contains "$(cat "$merge")" "gh pr checks" "merge: checks CI"
+assert_contains "$(cat "$merge")" "gh pr merge" "merge: merges the PR"
+assert_contains "$(cat "$merge")" "--merge --delete-branch" "merge: merge commit, delete the remote branch"
+assert_contains "$(cat "$merge")" "csw:cleanup" "merge: chains into cleanup"
+# The skill may *mention* --squash to forbid it; it must never *use* it.
+bad_flags=$(grep "gh pr merge" "$merge" | grep -E -- "--squash|--rebase" || true)
+assert_eq "$bad_flags" "" "merge: no gh pr merge line uses --squash or --rebase"
+assert_eq "$(fm_field "$merge" 'disable-model-invocation')" "" "merge: stays model-invocable"
+
 report
