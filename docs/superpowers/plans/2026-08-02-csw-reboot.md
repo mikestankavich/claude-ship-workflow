@@ -980,6 +980,10 @@ prose the assistant has to remember.
   diffing. Exit `0` even when nothing matches (empty output is the answer).
 - Glob semantics: `**` matches across `/`, `*` matches within one segment, `?` matches one
   non-`/` character, and the pattern is anchored to the whole path.
+- Exit codes: `0` success (including "no gates matched"), `2` cannot diff the given base ref,
+  `4` malformed config — `gates` is not an array, a `gates` entry is not an object, or an
+  object entry is missing `when` or `run`. `3` (not in a git repository) propagates unchanged
+  from `csw-config`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1076,6 +1080,45 @@ bar" "run values containing | do not collide during dedup"
 # Two gates with genuinely identical run strings still collapse to one line.
 assert_eq "$(metagates 'dup/one' 'dup/two')" "cmd-dup" "true duplicate run strings still dedup"
 
+# A malformed "gates" config must not leak a raw jq trace or an undocumented
+# exit code — it gets the same exit 4 as csw-config's own malformed-config
+# check. See fix round 2 in task-5-report.md.
+bad_object=$(make_repo)
+write_config "$bad_object" <<'JSON'
+{ "gates": {} }
+JSON
+assert_status 4 "gates as an object (not an array) exits 4" -- \
+  sh -c "cd '$bad_object' && printf 'foo/x\n' | '$BIN/csw-gates' --files"
+
+bad_string=$(make_repo)
+write_config "$bad_string" <<'JSON'
+{ "gates": "just validate" }
+JSON
+assert_status 4 "gates as a bare string (not an array) exits 4" -- \
+  sh -c "cd '$bad_string' && printf 'foo/x\n' | '$BIN/csw-gates' --files"
+
+bad_entry=$(make_repo)
+write_config "$bad_entry" <<'JSON'
+{ "gates": ["not-an-object"] }
+JSON
+assert_status 4 "a gates entry that is not an object exits 4" -- \
+  sh -c "cd '$bad_entry' && printf 'foo/x\n' | '$BIN/csw-gates' --files"
+
+bad_missing=$(make_repo)
+write_config "$bad_missing" <<'JSON'
+{ "gates": [ { "when": "foo/**" } ] }
+JSON
+assert_status 4 "a gates entry missing run exits 4 rather than silently skipping" -- \
+  sh -c "cd '$bad_missing' && printf 'foo/x\n' | '$BIN/csw-gates' --files"
+
+# A valid gates array still behaves exactly as before.
+good=$(make_repo)
+write_config "$good" <<'JSON'
+{ "gates": [ { "when": "foo/**", "run": "just foo" } ] }
+JSON
+assert_eq "$(cd "$good" && printf 'foo/x\n' | "$BIN/csw-gates" --files)" "just foo" \
+  "a valid gates array still matches as before"
+
 report
 ```
 
@@ -1159,15 +1202,43 @@ case "${1:-}" in
 esac
 
 gates=$("$HERE/csw-config" get gates)
+
+# The "gates" config key must be a JSON array — {} or a bare string would
+# otherwise leak a raw jq trace and an undocumented exit code the first time
+# something below tries to index or iterate it. Same failure class as
+# csw-config's "config must be a JSON object" check, so it gets the same
+# exit code: 4, malformed config.
+#
+# `csw-config get` unwraps a top-level JSON string to raw unquoted text (so
+# scalar keys like ticketPrefix print without quotes), which means a
+# string-valued "gates" arrives here as text that isn't valid JSON at all —
+# a second, unguarded `jq -r 'type'` on it would itself fail to parse and
+# print its own trace to stderr. Suppress that and fall back to a plain
+# description instead, so only this script's own die() message reaches the
+# user, in every case.
+gates_type=$(printf '%s' "$gates" | jq -r 'type' 2>/dev/null) || gates_type='valid JSON'
+if [ "$gates_type" != array ]; then
+  die "config key \"gates\" must be an array, not $gates_type" 4
+fi
+
 count=$(printf '%s' "$gates" | jq 'length')
 
 emitted=''
 i=0
 while [ "$i" -lt "$count" ]; do
+  entry_type=$(printf '%s' "$gates" | jq -r ".[$i] | type")
+  if [ "$entry_type" != object ]; then
+    die "gates[$i] must be an object, not $entry_type" 4
+  fi
   when=$(printf '%s' "$gates" | jq -r ".[$i].when // empty")
   run=$(printf '%s' "$gates" | jq -r ".[$i].run // empty")
+  # Silently skipping a configured gate is a wrong answer, not a safe
+  # default — a migration-checksum gate that quietly never runs is the exact
+  # failure this program exists to prevent. Reject it instead.
+  if [ -z "$when" ] || [ -z "$run" ]; then
+    die "gates[$i] is missing \"when\" or \"run\"" 4
+  fi
   i=$((i + 1))
-  if [ -z "$when" ] || [ -z "$run" ]; then continue; fi
   regex=$(glob_to_regex "$when")
   if printf '%s\n' "$files" | grep -Eq "$regex"; then
     if ! printf '%s' "$emitted" | grep -Fxq -- "$run"; then
@@ -1184,6 +1255,12 @@ Note: the `emitted` dedup accumulator is newline-delimited and checked with
 substring check — a `run` value containing an embedded literal newline could
 still confuse it, but `run` values are expected to be single command lines.
 
+A gates entry that is an object but missing `when` or `run` now `die`s with
+exit 4 instead of being silently skipped — see fix round 2 in
+task-5-report.md for why (the brief's own shipped test never asserted the
+skip behavior, and silently not running a configured gate is the exact
+failure this program exists to prevent).
+
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
@@ -1191,7 +1268,7 @@ chmod +x bin/csw-gates
 bash tests/test-csw-gates.sh
 ```
 
-Expected: PASS — `24 passed, 0 failed`.
+Expected: PASS — `29 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 

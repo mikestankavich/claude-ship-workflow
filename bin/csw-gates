@@ -65,15 +65,43 @@ case "${1:-}" in
 esac
 
 gates=$("$HERE/csw-config" get gates)
+
+# The "gates" config key must be a JSON array — {} or a bare string would
+# otherwise leak a raw jq trace and an undocumented exit code the first time
+# something below tries to index or iterate it. Same failure class as
+# csw-config's "config must be a JSON object" check, so it gets the same
+# exit code: 4, malformed config.
+#
+# `csw-config get` unwraps a top-level JSON string to raw unquoted text (so
+# scalar keys like ticketPrefix print without quotes), which means a
+# string-valued "gates" arrives here as text that isn't valid JSON at all —
+# a second, unguarded `jq -r 'type'` on it would itself fail to parse and
+# print its own trace to stderr. Suppress that and fall back to a plain
+# description instead, so only this script's own die() message reaches the
+# user, in every case.
+gates_type=$(printf '%s' "$gates" | jq -r 'type' 2>/dev/null) || gates_type='valid JSON'
+if [ "$gates_type" != array ]; then
+  die "config key \"gates\" must be an array, not $gates_type" 4
+fi
+
 count=$(printf '%s' "$gates" | jq 'length')
 
 emitted=''
 i=0
 while [ "$i" -lt "$count" ]; do
+  entry_type=$(printf '%s' "$gates" | jq -r ".[$i] | type")
+  if [ "$entry_type" != object ]; then
+    die "gates[$i] must be an object, not $entry_type" 4
+  fi
   when=$(printf '%s' "$gates" | jq -r ".[$i].when // empty")
   run=$(printf '%s' "$gates" | jq -r ".[$i].run // empty")
+  # Silently skipping a configured gate is a wrong answer, not a safe
+  # default — a migration-checksum gate that quietly never runs is the exact
+  # failure this program exists to prevent. Reject it instead.
+  if [ -z "$when" ] || [ -z "$run" ]; then
+    die "gates[$i] is missing \"when\" or \"run\"" 4
+  fi
   i=$((i + 1))
-  if [ -z "$when" ] || [ -z "$run" ]; then continue; fi
   regex=$(glob_to_regex "$when")
   if printf '%s\n' "$files" | grep -Eq "$regex"; then
     if ! printf '%s' "$emitted" | grep -Fxq -- "$run"; then

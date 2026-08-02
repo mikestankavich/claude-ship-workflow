@@ -88,4 +88,43 @@ bar" "run values containing | do not collide during dedup"
 # Two gates with genuinely identical run strings still collapse to one line.
 assert_eq "$(metagates 'dup/one' 'dup/two')" "cmd-dup" "true duplicate run strings still dedup"
 
+# A malformed "gates" config must not leak a raw jq trace or an undocumented
+# exit code — it gets the same exit 4 as csw-config's own malformed-config
+# check. See fix round 2 in task-5-report.md.
+bad_object=$(make_repo)
+write_config "$bad_object" <<'JSON'
+{ "gates": {} }
+JSON
+assert_status 4 "gates as an object (not an array) exits 4" -- \
+  sh -c "cd '$bad_object' && printf 'foo/x\n' | '$BIN/csw-gates' --files"
+
+bad_string=$(make_repo)
+write_config "$bad_string" <<'JSON'
+{ "gates": "just validate" }
+JSON
+assert_status 4 "gates as a bare string (not an array) exits 4" -- \
+  sh -c "cd '$bad_string' && printf 'foo/x\n' | '$BIN/csw-gates' --files"
+
+bad_entry=$(make_repo)
+write_config "$bad_entry" <<'JSON'
+{ "gates": ["not-an-object"] }
+JSON
+assert_status 4 "a gates entry that is not an object exits 4" -- \
+  sh -c "cd '$bad_entry' && printf 'foo/x\n' | '$BIN/csw-gates' --files"
+
+bad_missing=$(make_repo)
+write_config "$bad_missing" <<'JSON'
+{ "gates": [ { "when": "foo/**" } ] }
+JSON
+assert_status 4 "a gates entry missing run exits 4 rather than silently skipping" -- \
+  sh -c "cd '$bad_missing' && printf 'foo/x\n' | '$BIN/csw-gates' --files"
+
+# A valid gates array still behaves exactly as before.
+good=$(make_repo)
+write_config "$good" <<'JSON'
+{ "gates": [ { "when": "foo/**", "run": "just foo" } ] }
+JSON
+assert_eq "$(cd "$good" && printf 'foo/x\n' | "$BIN/csw-gates" --files)" "just foo" \
+  "a valid gates array still matches as before"
+
 report
