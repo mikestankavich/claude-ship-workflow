@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# csw-sweep — find merged-but-undeleted branches and the worktrees holding them.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+
+BASE=$("$HERE/csw-config" get baseBranch)
+
+usage() {
+  cat <<'EOF'
+Usage:
+  csw-sweep            Human-readable report of stale branches and worktrees
+  csw-sweep branches   One stale local branch per line
+  csw-sweep worktrees  <path><TAB><branch> per line for worktrees holding one
+EOF
+}
+
+stale_branches() {
+  local current merged gone
+  current=$(git branch --show-current 2>/dev/null || true)
+  # Merged into the base. Requires --merge merges; squash-merges are invisible here.
+  merged=$(git branch --format='%(refname:short)' --merged "$BASE" 2>/dev/null || true)
+  # Upstream deleted — what `gh pr merge --delete-branch` leaves behind.
+  gone=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null \
+    | awk '$2 == "[gone]" { print $1 }')
+  printf '%s\n%s\n' "$merged" "$gone" \
+    | sed -e '/^$/d' \
+    | sort -u \
+    | grep -vx "$BASE" \
+    | grep -vx "${current:-@@no-current-branch@@}" \
+    || true
+}
+
+stale_worktrees() {
+  local stale path ref short
+  stale=$(stale_branches)
+  if [ -z "$stale" ]; then return 0; fi
+  git worktree list --porcelain | awk '
+    /^worktree /  { path = substr($0, 10); ref = "" }
+    /^branch /    { ref = substr($0, 8) }
+    /^$/          { if (path != "") print path "\t" ref; path = "" }
+    END           { if (path != "") print path "\t" ref }
+  ' | while IFS="$(printf '\t')" read -r path ref; do
+    if [ -z "$ref" ]; then continue; fi
+    short=${ref#refs/heads/}
+    if printf '%s\n' "$stale" | grep -qx "$short"; then
+      printf '%s\t%s\n' "$path" "$short"
+    fi
+  done
+}
+
+case "${1:-}" in
+  branches)
+    stale_branches
+    ;;
+  worktrees)
+    stale_worktrees
+    ;;
+  ''|report)
+    b=$(stale_branches)
+    w=$(stale_worktrees)
+    if [ -z "$b" ] && [ -z "$w" ]; then
+      printf 'nothing to sweep\n'
+      exit 0
+    fi
+    if [ -n "$w" ]; then
+      printf 'Stale worktrees:\n'
+      printf '%s\n' "$w" | sed -e 's/^/  /' -e "s/$(printf '\t')/  ->  /"
+    fi
+    if [ -n "$b" ]; then
+      printf 'Merged or upstream-gone branches:\n'
+      printf '%s\n' "$b" | sed -e 's/^/  /'
+    fi
+    ;;
+  -h|--help)
+    usage
+    ;;
+  *)
+    printf 'csw-sweep: unknown subcommand: %s\n' "$1" >&2
+    exit 2
+    ;;
+esac
