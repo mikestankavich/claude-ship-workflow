@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# csw-config — read the effective CSW config for the current repository.
+#
+# Looks for .claude/csw.json in the current worktree root first, then in the
+# main worktree root. The fallback matters because .claude/worktrees/ is
+# usually gitignored, so a linked worktree does not carry the config file.
+set -euo pipefail
+
+DEFAULTS='{
+  "ticketPrefix": "",
+  "tracker": "none",
+  "baseBranch": "main",
+  "defaultType": "feat",
+  "validate": "",
+  "worktreeDir": ".worktrees",
+  "branchPattern": "<type>/<ticket>-<slug>",
+  "gates": [],
+  "batch": { "maxTickets": 3, "singleWriterLabels": ["migration"] }
+}'
+
+die() { printf 'csw-config: %s\n' "$1" >&2; exit "$2"; }
+
+usage() {
+  cat <<'EOF'
+Usage:
+  csw-config json           Print the effective config (defaults merged with the repo's)
+  csw-config get <key>      Print one value; dotted keys index into objects
+  csw-config path           Print the config file path, or nothing if there is none
+EOF
+}
+
+config_path() {
+  local root common main
+  root=$(git rev-parse --show-toplevel 2>/dev/null) || die "not in a git repository" 3
+  if [ -f "$root/.claude/csw.json" ]; then
+    printf '%s\n' "$root/.claude/csw.json"
+    return 0
+  fi
+  common=$(git rev-parse --git-common-dir 2>/dev/null) || return 0
+  case "$common" in
+    /*) ;;
+    *) common="$root/$common" ;;
+  esac
+  main=$(cd "$common/.." 2>/dev/null && pwd -P) || return 0
+  if [ -f "$main/.claude/csw.json" ]; then
+    printf '%s\n' "$main/.claude/csw.json"
+  fi
+  return 0
+}
+
+effective() {
+  local p
+  p=$(config_path)
+  if [ -z "$p" ]; then
+    printf '%s' "$DEFAULTS" | jq '.'
+    return 0
+  fi
+  if ! jq -e . "$p" >/dev/null 2>&1; then
+    die "invalid JSON in $p" 4
+  fi
+  # jq's `*` deep-merges objects and replaces arrays, which is what we want:
+  # a repo listing two gates should get exactly those two, not those plus ours.
+  jq -n --argjson d "$DEFAULTS" --slurpfile u "$p" '$d * $u[0]'
+}
+
+cmd=${1:-}
+case "$cmd" in
+  json)
+    effective
+    ;;
+  path)
+    config_path
+    ;;
+  get)
+    if [ $# -ne 2 ]; then die "usage: csw-config get <key>" 2; fi
+    value=$(effective | jq -c --arg k "$2" 'getpath($k | split("."))' 2>/dev/null) \
+      || die "unknown key: $2" 2
+    if [ "$value" = "null" ] || [ -z "$value" ]; then
+      die "unknown key: $2" 2
+    fi
+    printf '%s' "$value" | jq -r 'if type == "string" then . else tojson end'
+    ;;
+  ''|-h|--help)
+    usage
+    ;;
+  *)
+    die "unknown subcommand: $cmd" 2
+    ;;
+esac
