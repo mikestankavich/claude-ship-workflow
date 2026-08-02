@@ -106,5 +106,7 @@ assert_contains "$(cat "$merge")" "csw:cleanup" "merge: chains into cleanup"
 bad_flags=$(grep "gh pr merge" "$merge" | grep -E -- "--squash|--rebase" || true)
 assert_eq "$bad_flags" "" "merge: no gh pr merge line uses --squash or --rebase"
 assert_eq "$(fm_field "$merge" 'disable-model-invocation')" "" "merge: stays model-invocable"
+assert_contains "$(cat "$merge")" "only ever entered after a confirmed merge" "merge: cleanup gated on a confirmed merge"
+assert_contains "$(cat "$merge")" "BLOCKED" "merge: covers mergeStateStatus BLOCKED"
 
 report
