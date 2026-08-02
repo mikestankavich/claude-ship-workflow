@@ -1457,6 +1457,94 @@ assert_eq "$(cd "$clean" && "$BIN/csw-sweep" branches)" "" "clean repo has no br
 assert_contains "$(cd "$clean" && "$BIN/csw-sweep")" "nothing to sweep" "clean repo reports nothing to sweep"
 assert_status 0 "clean sweep exits 0" -- in_dir "$clean" "$BIN/csw-sweep"
 
+# A `.` in the current branch name must not act as a regex wildcard and
+# swallow an unrelated merged branch (feat/a.b as current used to hide
+# feat/aXb, because grep -vx treated the current branch as a pattern).
+dotrepo=$(make_repo)
+write_config "$dotrepo" <<'JSON'
+{ "baseBranch": "main", "worktreeDir": ".claude/worktrees" }
+JSON
+(
+  cd "$dotrepo" || exit 1
+  git checkout -q -b feat/a.b
+  printf 'ab\n' >ab.txt
+  git add -A && git commit -qm "a.b work"
+  git checkout -q main
+  git merge -q --no-ff -m "merge feat/a.b" feat/a.b
+
+  git checkout -q -b feat/aXb
+  printf 'axb\n' >axb.txt
+  git add -A && git commit -qm "aXb work"
+  git checkout -q main
+  git merge -q --no-ff -m "merge feat/aXb" feat/aXb
+
+  git checkout -q feat/a.b
+)
+dot_branches=$(cd "$dotrepo" && "$BIN/csw-sweep" branches)
+assert_contains "$dot_branches" "feat/aXb" \
+  "a dot in the current branch name does not swallow an unrelated merged branch"
+
+# A branch name with a `+` (also special to regexes) round-trips correctly
+# through both `branches` and `worktrees`.
+plusrepo=$(make_repo)
+write_config "$plusrepo" <<'JSON'
+{ "baseBranch": "main", "worktreeDir": ".claude/worktrees" }
+JSON
+(
+  cd "$plusrepo" || exit 1
+  git checkout -q -b "feat/a+b"
+  printf 'plus\n' >plus.txt
+  git add -A && git commit -qm "a+b work"
+  git checkout -q main
+  git merge -q --no-ff -m "merge feat/a+b" "feat/a+b"
+  git worktree add -q "$plusrepo/.claude/worktrees/plus" "feat/a+b"
+)
+plus_branches=$(cd "$plusrepo" && "$BIN/csw-sweep" branches)
+assert_contains "$plus_branches" "feat/a+b" "a + in a branch name round-trips through branches"
+plus_worktrees=$(cd "$plusrepo" && "$BIN/csw-sweep" worktrees)
+assert_contains "$plus_worktrees" "worktrees/plus" "a + in a branch name round-trips through worktrees (path)"
+assert_contains "$plus_worktrees" "feat/a+b" "a + in a branch name round-trips through worktrees (branch)"
+
+# HEAD detached in the main worktree must not leak the synthetic
+# "(HEAD detached at ...)" pseudo-entry into `branches` output, and
+# `worktrees` output must still parse as exactly <path><TAB><branch>.
+detrepo=$(make_repo)
+write_config "$detrepo" <<'JSON'
+{ "baseBranch": "main", "worktreeDir": ".claude/worktrees" }
+JSON
+(
+  cd "$detrepo" || exit 1
+  git checkout -q -b feat/detected
+  printf 'd\n' >d.txt
+  git add -A && git commit -qm "detected work"
+  git checkout -q main
+  git merge -q --no-ff -m "merge feat/detected" feat/detected
+  git worktree add -q "$detrepo/.claude/worktrees/detected" feat/detected
+  git checkout -q --detach main
+)
+det_branches=$(cd "$detrepo" && "$BIN/csw-sweep" branches)
+assert_contains "$det_branches" "feat/detected" \
+  "detached HEAD in the main worktree still sweeps real merged branches"
+case "$det_branches" in
+  *"HEAD detached"*)
+    assert_eq "leaked-pseudo-entry" "no-pseudo-entry" \
+      "detached HEAD must not leak a pseudo branch-name line into branches" ;;
+  *) PASSES=$((PASSES + 1)) ;;
+esac
+
+det_worktrees=$(cd "$detrepo" && "$BIN/csw-sweep" worktrees)
+assert_contains "$det_worktrees" "worktrees/detected" \
+  "worktree on a merged branch is still swept when main HEAD is detached"
+case "$det_worktrees" in
+  *"HEAD detached"*)
+    assert_eq "leaked-pseudo-entry-worktrees" "no-pseudo-entry" \
+      "worktrees output must not contain a HEAD-detached pseudo-entry" ;;
+  *) PASSES=$((PASSES + 1)) ;;
+esac
+badfields=$(printf '%s\n' "$det_worktrees" | awk -F'\t' 'NF && NF != 2 { c++ } END { print c + 0 }')
+assert_eq "$badfields" "0" \
+  "worktrees output parses as exactly <path><TAB><branch> when main HEAD is detached"
+
 report
 ```
 
@@ -1494,15 +1582,18 @@ stale_branches() {
   local current merged gone
   current=$(git branch --show-current 2>/dev/null || true)
   # Merged into the base. Requires --merge merges; squash-merges are invisible here.
-  merged=$(git branch --format='%(refname:short)' --merged "$BASE" 2>/dev/null || true)
+  # Plumbing, not `git branch --merged`: the porcelain command emits a synthetic
+  # "(HEAD detached at ...)" pseudo-entry when HEAD is detached, which is not a
+  # branch name and must never reach the output. for-each-ref only walks real refs.
+  merged=$(git for-each-ref --format='%(refname:short)' --merged "$BASE" refs/heads 2>/dev/null || true)
   # Upstream deleted — what `gh pr merge --delete-branch` leaves behind.
   gone=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null \
     | awk '$2 == "[gone]" { print $1 }')
   printf '%s\n%s\n' "$merged" "$gone" \
     | sed -e '/^$/d' \
     | sort -u \
-    | grep -vx "$BASE" \
-    | grep -vx "${current:-@@no-current-branch@@}" \
+    | grep -Fvx "$BASE" \
+    | grep -Fvx "${current:-@@no-current-branch@@}" \
     || true
 }
 
@@ -1518,7 +1609,7 @@ stale_worktrees() {
   ' | while IFS="$(printf '\t')" read -r path ref; do
     if [ -z "$ref" ]; then continue; fi
     short=${ref#refs/heads/}
-    if printf '%s\n' "$stale" | grep -qx "$short"; then
+    if printf '%s\n' "$stale" | grep -Fqx "$short"; then
       printf '%s\t%s\n' "$path" "$short"
     fi
   done
@@ -1564,7 +1655,7 @@ chmod +x bin/csw-sweep
 bash tests/test-csw-sweep.sh
 ```
 
-Expected: PASS — `11 passed, 0 failed`.
+Expected: PASS — `18 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 

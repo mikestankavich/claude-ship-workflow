@@ -19,15 +19,18 @@ stale_branches() {
   local current merged gone
   current=$(git branch --show-current 2>/dev/null || true)
   # Merged into the base. Requires --merge merges; squash-merges are invisible here.
-  merged=$(git branch --format='%(refname:short)' --merged "$BASE" 2>/dev/null || true)
+  # Plumbing, not `git branch --merged`: the porcelain command emits a synthetic
+  # "(HEAD detached at ...)" pseudo-entry when HEAD is detached, which is not a
+  # branch name and must never reach the output. for-each-ref only walks real refs.
+  merged=$(git for-each-ref --format='%(refname:short)' --merged "$BASE" refs/heads 2>/dev/null || true)
   # Upstream deleted — what `gh pr merge --delete-branch` leaves behind.
   gone=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null \
     | awk '$2 == "[gone]" { print $1 }')
   printf '%s\n%s\n' "$merged" "$gone" \
     | sed -e '/^$/d' \
     | sort -u \
-    | grep -vx "$BASE" \
-    | grep -vx "${current:-@@no-current-branch@@}" \
+    | grep -Fvx "$BASE" \
+    | grep -Fvx "${current:-@@no-current-branch@@}" \
     || true
 }
 
@@ -43,7 +46,7 @@ stale_worktrees() {
   ' | while IFS="$(printf '\t')" read -r path ref; do
     if [ -z "$ref" ]; then continue; fi
     short=${ref#refs/heads/}
-    if printf '%s\n' "$stale" | grep -qx "$short"; then
+    if printf '%s\n' "$stale" | grep -Fqx "$short"; then
       printf '%s\t%s\n' "$path" "$short"
     fi
   done
