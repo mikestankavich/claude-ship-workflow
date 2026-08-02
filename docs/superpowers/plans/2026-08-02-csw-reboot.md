@@ -534,6 +534,30 @@ mkdir -p "$repo/.claude"
 printf '{ not json\n' >"$repo/.claude/csw.json"
 assert_status 4 "malformed config exits 4" -- in_dir "$repo" "$BIN/csw-config" json
 
+# --- syntactically valid JSON that is not an object is also a config error ---
+repo=$(make_repo)
+write_config "$repo" <<'JSON'
+[1, 2, 3]
+JSON
+assert_status 4 "top-level array config exits 4" -- in_dir "$repo" "$BIN/csw-config" json
+
+repo=$(make_repo)
+write_config "$repo" <<'JSON'
+"hello"
+JSON
+assert_status 4 "top-level bare-string config exits 4" -- in_dir "$repo" "$BIN/csw-config" json
+
+# --- a key explicitly set to null is present, not unknown ---
+repo=$(make_repo)
+write_config "$repo" <<'JSON'
+{ "ticketPrefix": null }
+JSON
+assert_eq "$(cd "$repo" && "$BIN/csw-config" get ticketPrefix)" "null" "explicit null value prints as null"
+assert_status 0 "explicit null value exits 0" -- in_dir "$repo" "$BIN/csw-config" get ticketPrefix
+
+# --- a genuinely absent key still exits 2, even with a valid config file present ---
+assert_status 2 "absent key exits 2 alongside a valid config" -- in_dir "$repo" "$BIN/csw-config" get nope
+
 report
 ```
 
@@ -610,6 +634,9 @@ effective() {
   if ! jq -e . "$p" >/dev/null 2>&1; then
     die "invalid JSON in $p" 4
   fi
+  if ! jq -e 'type == "object"' "$p" >/dev/null 2>&1; then
+    die "config must be a JSON object, not $(jq -r 'type' "$p") — $p" 4
+  fi
   # jq's `*` deep-merges objects and replaces arrays, which is what we want:
   # a repo listing two gates should get exactly those two, not those plus ours.
   jq -n --argjson d "$DEFAULTS" --slurpfile u "$p" '$d * $u[0]'
@@ -625,11 +652,21 @@ case "$cmd" in
     ;;
   get)
     if [ $# -ne 2 ]; then die "usage: csw-config get <key>" 2; fi
-    value=$(effective | jq -c --arg k "$2" 'getpath($k | split("."))' 2>/dev/null) \
-      || die "unknown key: $2" 2
-    if [ "$value" = "null" ] || [ -z "$value" ]; then
+    # A plain `json=$(effective)` is intentional here (not `if effective; then`):
+    # under set -e, a failing command substitution assignment still aborts the
+    # script with effective's own exit code (e.g. 4 for malformed config), so
+    # we don't need to re-derive that code ourselves.
+    json=$(effective)
+    # Test path *existence* rather than inferring it from the value, so a key
+    # explicitly set to null is distinguishable from a key that is absent.
+    exists=$(printf '%s' "$json" | jq -r --arg k "$2" '
+      ($k | split(".")) as $p
+      | if (getpath($p[0:-1]) | type) == "object" and (getpath($p[0:-1]) | has($p[-1]))
+        then "yes" else "no" end' 2>/dev/null) || exists=no
+    if [ "$exists" != "yes" ]; then
       die "unknown key: $2" 2
     fi
+    value=$(printf '%s' "$json" | jq -c --arg k "$2" 'getpath($k | split("."))')
     printf '%s' "$value" | jq -r 'if type == "string" then . else tojson end'
     ;;
   ''|-h|--help)
@@ -648,7 +685,7 @@ chmod +x bin/csw-config
 bash tests/test-csw-config.sh
 ```
 
-Expected: PASS — `20 passed, 0 failed`.
+Expected: PASS — `25 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 

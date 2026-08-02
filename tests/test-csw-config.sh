@@ -55,4 +55,28 @@ mkdir -p "$repo/.claude"
 printf '{ not json\n' >"$repo/.claude/csw.json"
 assert_status 4 "malformed config exits 4" -- in_dir "$repo" "$BIN/csw-config" json
 
+# --- syntactically valid JSON that is not an object is also a config error ---
+repo=$(make_repo)
+write_config "$repo" <<'JSON'
+[1, 2, 3]
+JSON
+assert_status 4 "top-level array config exits 4" -- in_dir "$repo" "$BIN/csw-config" json
+
+repo=$(make_repo)
+write_config "$repo" <<'JSON'
+"hello"
+JSON
+assert_status 4 "top-level bare-string config exits 4" -- in_dir "$repo" "$BIN/csw-config" json
+
+# --- a key explicitly set to null is present, not unknown ---
+repo=$(make_repo)
+write_config "$repo" <<'JSON'
+{ "ticketPrefix": null }
+JSON
+assert_eq "$(cd "$repo" && "$BIN/csw-config" get ticketPrefix)" "null" "explicit null value prints as null"
+assert_status 0 "explicit null value exits 0" -- in_dir "$repo" "$BIN/csw-config" get ticketPrefix
+
+# --- a genuinely absent key still exits 2, even with a valid config file present ---
+assert_status 2 "absent key exits 2 alongside a valid config" -- in_dir "$repo" "$BIN/csw-config" get nope
+
 report
