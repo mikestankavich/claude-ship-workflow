@@ -21,24 +21,30 @@ glob_to_regex() {
   i=0
   while [ "$i" -lt "${#g}" ]; do
     c=${g:i:1}
+    # A literal backslash must become the two-character ERE `\\`. Handled here,
+    # ahead of the case, because case-pattern quoting can't match it: a
+    # single-quoted '\\' pattern requires the tested value to contain two
+    # backslash characters, but $c is always exactly one — that arm can never
+    # fire, so a lone backslash used to fall through unescaped into the regex.
+    if [ "$c" = '\' ]; then
+      out="${out}\\\\"
+      i=$((i + 1))
+      continue
+    fi
     case $c in
       '*')
         if [ "${g:i+1:1}" = '*' ]; then
-          out="$out.*"
+          out="${out}.*"
           i=$((i + 1))
         else
-          # $out is a plain string here, not an array; these are literal regex chars.
-          # shellcheck disable=SC1087
-          out="$out[^/]*"
+          out="${out}[^/]*"
         fi
         ;;
       '?')
-        # $out is a plain string here, not an array; these are literal regex chars.
-        # shellcheck disable=SC1087
-        out="$out[^/]"
+        out="${out}[^/]"
         ;;
-      '.'|'['|']'|'('|')'|'{'|'}'|'+'|'^'|'$'|'|'|'\\') out="$out\\$c" ;;
-      *) out="$out$c" ;;
+      '.'|'['|']'|'('|')'|'{'|'}'|'+'|'^'|'$'|'|') out="${out}\\$c" ;;
+      *) out="${out}$c" ;;
     esac
     i=$((i + 1))
   done
@@ -61,7 +67,7 @@ esac
 gates=$("$HERE/csw-config" get gates)
 count=$(printf '%s' "$gates" | jq 'length')
 
-emitted='|'
+emitted=''
 i=0
 while [ "$i" -lt "$count" ]; do
   when=$(printf '%s' "$gates" | jq -r ".[$i].when // empty")
@@ -70,12 +76,10 @@ while [ "$i" -lt "$count" ]; do
   if [ -z "$when" ] || [ -z "$run" ]; then continue; fi
   regex=$(glob_to_regex "$when")
   if printf '%s\n' "$files" | grep -Eq "$regex"; then
-    case "$emitted" in
-      *"|$run|"*) ;;
-      *)
-        printf '%s\n' "$run"
-        emitted="$emitted$run|"
-        ;;
-    esac
+    if ! printf '%s' "$emitted" | grep -Fxq -- "$run"; then
+      printf '%s\n' "$run"
+      emitted="${emitted}${run}
+"
+    fi
   fi
 done

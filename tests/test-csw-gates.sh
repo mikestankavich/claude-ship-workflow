@@ -49,4 +49,43 @@ assert_eq "$("$BIN/csw-gates" main)" "just backend migrate-checksums" "diff mode
 empty=$(make_repo)
 assert_eq "$(cd "$empty" && printf 'migrations/x.sql\n' | "$BIN/csw-gates" --files)" "" "no gates configured"
 
+# Literal metacharacters and a literal backslash in `when`, plus dedup edge cases
+# around `run` values that themselves contain a `|`, and true duplicate `run`
+# strings. See fix round 1 in task-5-report.md for why these were added.
+meta=$(make_repo)
+write_config "$meta" <<'JSON'
+{
+  "gates": [
+    { "when": "a+b/**",       "run": "cmd-plus" },
+    { "when": "file(1).txt",  "run": "cmd-paren" },
+    { "when": "x[0-9].sql",   "run": "cmd-bracket" },
+    { "when": "back\\slash",  "run": "cmd-backslash" },
+    { "when": "pipe/one",     "run": "echo foo|bar" },
+    { "when": "pipe/two",     "run": "bar" },
+    { "when": "dup/one",      "run": "cmd-dup" },
+    { "when": "dup/two",      "run": "cmd-dup" }
+  ]
+}
+JSON
+cd "$meta" || exit 1
+metagates() { printf '%s\n' "$@" | "$BIN/csw-gates" --files; }
+
+assert_eq "$(metagates 'a+b/foo')" "cmd-plus" "literal + is matched literally"
+assert_eq "$(metagates 'aXb/foo')" "" "+ is not a regex quantifier"
+assert_eq "$(metagates 'file(1).txt')" "cmd-paren" "literal parens are matched literally"
+assert_eq "$(metagates 'file1.txt')" "" "() is not a regex group"
+assert_eq "$(metagates 'x[0-9].sql')" "cmd-bracket" "literal brackets are matched literally"
+assert_eq "$(metagates 'x5.sql')" "" "[0-9] is not a regex character class"
+assert_eq "$(metagates 'back\slash')" "cmd-backslash" "literal backslash in when matches a path with a backslash"
+assert_eq "$(metagates 'backXslash')" "" "literal backslash in when does not match a path without one"
+
+# Two gates whose run values are `echo foo|bar` and `bar`: the second must not
+# be dropped as a false-positive substring match of the first.
+assert_eq "$(metagates 'pipe/one' 'pipe/two')" \
+  "echo foo|bar
+bar" "run values containing | do not collide during dedup"
+
+# Two gates with genuinely identical run strings still collapse to one line.
+assert_eq "$(metagates 'dup/one' 'dup/two')" "cmd-dup" "true duplicate run strings still dedup"
+
 report
