@@ -2,6 +2,8 @@
 # Shared assertions and fixtures. Source this at the top of every test file.
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+# Used by the test files that source this library; shellcheck cannot see across `source`.
+# shellcheck disable=SC2034
 BIN="$REPO_ROOT/bin"
 PASSES=0
 FAILURES=0
