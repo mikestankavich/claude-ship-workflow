@@ -2307,9 +2307,9 @@ git commit -m "feat(skills): add csw:merge — CI-gated merge that chains into c
 
 ### Task 9: `skills/cleanup` — phase 3
 
-The phase that gets forgotten, made automatic. Returns to the base branch, removes this
-worktree and branch without asking, sweeps for others and asks, then reports tracker state
-and asks before closing anything.
+The phase that gets forgotten, made automatic. Confirms the merge, then returns to the base
+branch and removes this worktree and branch without asking, sweeps for others and asks, then
+reports tracker state and asks before closing anything.
 
 **Files:**
 - Create: `skills/cleanup/SKILL.md`
@@ -2335,6 +2335,8 @@ assert_contains "$(cat "$cleanup")" "git worktree prune" "cleanup: prunes stale 
 assert_contains "$(cat "$cleanup")" "Always ask before closing" "cleanup: never closes a ticket unasked"
 assert_contains "$(cat "$cleanup")" "sibling" "cleanup: checks for sibling PRs in other repos"
 assert_contains "$(cat "$cleanup")" "never require a separate instruction" "cleanup: branch cleanup is unconditional"
+assert_contains "$(cat "$cleanup")" "gh pr view --json state,mergedAt" "cleanup: verifies the PR is merged before removing anything"
+assert_contains "$(cat "$cleanup")" "unknown, not absent" "cleanup: a failed sweep is reported distinctly from an empty one"
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -2343,7 +2345,9 @@ assert_contains "$(cat "$cleanup")" "never require a separate instruction" "clea
 bash tests/test-skills.sh
 ```
 
-Expected: FAIL — `cleanup: runs the sweep` and the rest.
+Expected: FAIL — `cleanup: runs the sweep` and the rest, `30 passed, 9 failed` (30 from the
+`work` and `merge` assertions already in place; all 9 new cleanup assertions fail because
+`skills/cleanup/SKILL.md` does not exist yet).
 
 - [ ] **Step 3: Write the skill**
 
@@ -2360,10 +2364,29 @@ when_to_use: "clean up the worktree and merged branches", "any remaining worktre
 
 **Announce at start:** "Using csw:cleanup to close out <ticket>."
 
-Branch and worktree cleanup happens without asking. Closing a ticket always asks. Those two
-rules are not symmetric and the asymmetry is deliberate.
+Once the merge is confirmed, branch and worktree cleanup happens without asking. Closing a
+ticket always asks. Those two rules are not symmetric and the asymmetry is deliberate.
+Confirming the merge is itself the one precondition cleanup checks before it removes
+anything — that check is not optional, even though most of the time it passes instantly.
 
-## Step 1: Note where you are before you move
+## Step 1: Confirm the merge, then note where you are
+
+Before anything is removed, establish that the PR for this branch is actually merged:
+
+```bash
+gh pr view --json state,mergedAt
+```
+
+If this run was chained straight from **csw:merge**, the merge is already confirmed there —
+say so, and this check simply passes; the chained path stays frictionless.
+
+If `state` is not `MERGED`, or there is no PR at all, **stop**. Name the branch and what you
+found, and ask whether to clean up anyway. This is the one case where branch and worktree
+cleanup asks: `git branch -d` refuses an unmerged branch on its own, but nothing stops
+`git worktree remove` from deleting the checkout that holds someone's unlanded work, and the
+worktree carries no such protection of its own.
+
+Once the merge is confirmed:
 
 ```bash
 git rev-parse --show-toplevel     # this worktree's path
@@ -2388,8 +2411,7 @@ Worktree removal must run from outside the worktree being removed.
 
 ## Step 3: Remove this worktree and branch
 
-No confirmation. The PR is merged; this is bookkeeping, and it **should never require a
-separate instruction**.
+No confirmation here — Step 1 already confirmed the merge. This is bookkeeping, and it **should never require a separate instruction**.
 
 ```bash
 git worktree remove "<path from Step 1>"
@@ -2415,6 +2437,13 @@ git push origin --delete "<branch>"
 ```bash
 csw-sweep
 ```
+
+Check its exit code before trusting the output. Sweep results are never an error — finding
+nothing is exit 0, and `nothing to sweep` is itself a normal, successful report. A **non-zero
+exit always means the sweep did not run** — a bare repo, a broken config lookup — never that
+it ran and found nothing. When that happens, report that the sweep itself failed, show its
+message, and say plainly that stale branches and worktrees are **unknown, not absent**. Do
+not substitute "nothing to sweep" for a sweep that never ran.
 
 This is the part that turns *"any remaining worktrees or merged branches?"* from a question
 someone has to remember into something reported unprompted. Report what it found even when
@@ -2448,9 +2477,11 @@ is clean, even when it is obvious. Propose it, name what you would set it to, an
 
 | Thought | Reality |
 |---|---|
-| "I'll ask before deleting the worktree" | Do not. The PR merged; removing its worktree is bookkeeping. Asking is how it gets forgotten. |
+| "The worktree is right here, so it must be safe to remove" | Confirm the merge first. A worktree existing says nothing about whether its branch shipped. |
+| "I'll ask before deleting the worktree" | Once the merge is confirmed, do not. Removing its worktree from there is bookkeeping. Asking again is how it gets forgotten. |
 | "The ticket is clearly done, I'll close it" | Always ask. Every time. |
 | "The sweep is empty, nothing to report" | Report the empty sweep. Silence reads as "not checked". |
+| "`csw-sweep` printed nothing, so there's nothing stale" | Check the exit code. Non-zero means the sweep did not run — unknown is not the same as absent. |
 | "That other worktree is obviously stale too" | List it, ask, then act. |
 | "`git branch -d` refused, I'll use -D" | Refusal means unmerged commits. Investigate. |
 | "Uncommitted changes in the worktree are just scratch" | Show them first. That call is not yours. |
@@ -2463,7 +2494,7 @@ is clean, even when it is obvious. Propose it, name what you would set it to, an
 bash tests/run-tests.sh
 ```
 
-Expected: PASS across every test file.
+Expected: PASS across every test file. `test-skills.sh` reports `46 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 

@@ -118,5 +118,7 @@ assert_contains "$(cat "$cleanup")" "git worktree prune" "cleanup: prunes stale 
 assert_contains "$(cat "$cleanup")" "Always ask before closing" "cleanup: never closes a ticket unasked"
 assert_contains "$(cat "$cleanup")" "sibling" "cleanup: checks for sibling PRs in other repos"
 assert_contains "$(cat "$cleanup")" "never require a separate instruction" "cleanup: branch cleanup is unconditional"
+assert_contains "$(cat "$cleanup")" "gh pr view --json state,mergedAt" "cleanup: verifies the PR is merged before removing anything"
+assert_contains "$(cat "$cleanup")" "unknown, not absent" "cleanup: a failed sweep is reported distinctly from an empty one"
 
 report
