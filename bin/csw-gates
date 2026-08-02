@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# csw-gates — print the extra validation commands this diff triggers.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+
+die() { printf 'csw-gates: %s\n' "$1" >&2; exit "$2"; }
+
+usage() {
+  cat <<'EOF'
+Usage:
+  csw-gates <base-ref>   Diff <base-ref>...HEAD and print the gates it triggers
+  csw-gates --files      Read a newline-separated file list from stdin instead
+EOF
+}
+
+# Convert a config glob to an anchored POSIX extended regex.
+# ** crosses slashes, * does not, ? matches one non-slash character.
+glob_to_regex() {
+  local g=$1 out='' c i
+  i=0
+  while [ "$i" -lt "${#g}" ]; do
+    c=${g:i:1}
+    case $c in
+      '*')
+        if [ "${g:i+1:1}" = '*' ]; then
+          out="$out.*"
+          i=$((i + 1))
+        else
+          # $out is a plain string here, not an array; these are literal regex chars.
+          # shellcheck disable=SC1087
+          out="$out[^/]*"
+        fi
+        ;;
+      '?')
+        # $out is a plain string here, not an array; these are literal regex chars.
+        # shellcheck disable=SC1087
+        out="$out[^/]"
+        ;;
+      '.'|'['|']'|'('|')'|'{'|'}'|'+'|'^'|'$'|'|'|'\\') out="$out\\$c" ;;
+      *) out="$out$c" ;;
+    esac
+    i=$((i + 1))
+  done
+  printf '^%s$' "$out"
+}
+
+case "${1:-}" in
+  ''|-h|--help)
+    usage
+    exit 0
+    ;;
+  --files)
+    files=$(cat)
+    ;;
+  *)
+    files=$(git diff --name-only "$1...HEAD") || die "cannot diff $1...HEAD" 2
+    ;;
+esac
+
+gates=$("$HERE/csw-config" get gates)
+count=$(printf '%s' "$gates" | jq 'length')
+
+emitted='|'
+i=0
+while [ "$i" -lt "$count" ]; do
+  when=$(printf '%s' "$gates" | jq -r ".[$i].when // empty")
+  run=$(printf '%s' "$gates" | jq -r ".[$i].run // empty")
+  i=$((i + 1))
+  if [ -z "$when" ] || [ -z "$run" ]; then continue; fi
+  regex=$(glob_to_regex "$when")
+  if printf '%s\n' "$files" | grep -Eq "$regex"; then
+    case "$emitted" in
+      *"|$run|"*) ;;
+      *)
+        printf '%s\n' "$run"
+        emitted="$emitted$run|"
+        ;;
+    esac
+  fi
+done
