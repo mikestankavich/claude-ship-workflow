@@ -189,7 +189,7 @@ write_config() {
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/test-helpers.sh"
 
-LEGACY="commands skills scripts presets templates spec csw TESTING.md issues-for-review.md .envrc"
+LEGACY="commands scripts presets templates spec csw TESTING.md issues-for-review.md .envrc"
 
 for path in $LEGACY; do
   if [ -e "$REPO_ROOT/$path" ]; then
@@ -200,8 +200,21 @@ for path in $LEGACY; do
   fi
 done
 
+# skills/ itself is legitimate again: the reboot's plugin skills live at
+# skills/work/, skills/merge/, skills/cleanup/, skills/batch/. Only the v0.x
+# shape — the single flat skills/csw/SKILL.md — must stay gone.
+if [ -e "$REPO_ROOT/skills/csw" ]; then
+  FAILURES=$((FAILURES + 1))
+  printf 'FAIL legacy path still present: skills/csw\n' >&2
+else
+  PASSES=$((PASSES + 1))
+fi
+
 tracked=$(git -C "$REPO_ROOT" ls-files | grep -E '^(commands|scripts|presets|templates|spec|examples/profile-feature)/' || true)
 assert_eq "$tracked" "" "no legacy paths tracked in git"
+
+tracked_skills_csw=$(git -C "$REPO_ROOT" ls-files | grep -E '^skills/csw/' || true)
+assert_eq "$tracked_skills_csw" "" "no v0.x skills/csw files tracked in git"
 
 kept="LICENSE CONTRIBUTING.md CODE_OF_CONDUCT.md CHANGELOG.md README.md VERSION docs/design.md"
 for path in $kept; do
@@ -223,7 +236,7 @@ chmod +x tests/run-tests.sh
 bash tests/run-tests.sh
 ```
 
-Expected: FAIL — `legacy path still present: commands`, `skills`, `scripts`, `presets`,
+Expected: FAIL — `legacy path still present: commands`, `skills/csw`, `scripts`, `presets`,
 `templates`, `spec`, `csw`, `TESTING.md`, `issues-for-review.md`, `.envrc`.
 
 - [ ] **Step 5: Tear down v0.x**
@@ -1845,8 +1858,19 @@ SKILLS="$REPO_ROOT/skills"
 frontmatter() { sed -n '/^---$/,/^---$/p' "$1" | sed -e '1d' -e '$d'; }
 fm_field() { frontmatter "$1" | sed -n "s/^$2: *//p" | head -1; }
 
+# A test file that asserts nothing must never report success: fail loudly if
+# skills/ is missing, and fail if it exists but contains zero skill
+# directories, rather than letting the loop below iterate zero times and
+# report a silent green.
+if [ ! -d "$SKILLS" ]; then
+  FAILURES=$((FAILURES + 1))
+  printf 'FAIL skills/ directory does not exist\n' >&2
+fi
+
+skill_count=0
 for dir in "$SKILLS"/*/; do
   [ -d "$dir" ] || continue
+  skill_count=$((skill_count + 1))
   name=$(basename "$dir")
   file="$dir/SKILL.md"
 
@@ -1870,8 +1894,13 @@ for dir in "$SKILLS"/*/; do
   fi
 
   # No Trakrf values may leak out of examples/ and docs/ into the skills.
-  for leak in "TRA-" "just validate" "trakrf"; do
-    if grep -qi -- "$leak" "$file"; then
+  # Patterns are narrowed to the actual Trakrf values, not generic English:
+  # bare "TRA-" false-positives on words like "extra-careful", and bare
+  # "just validate" false-positives on ordinary prose about the config key
+  # named "validate" that skills legitimately reference by name. "just
+  # backend migrate-checksums" is the real gate command that must never leak.
+  for leak in "TRA-[0-9]" "just backend migrate-checksums" "trakrf"; do
+    if grep -qiE -- "$leak" "$file"; then
       FAILURES=$((FAILURES + 1))
       printf 'FAIL %s: leaks project-specific value: %s\n' "$name" "$leak" >&2
     else
@@ -1879,6 +1908,11 @@ for dir in "$SKILLS"/*/; do
     fi
   done
 done
+
+if [ "$skill_count" -eq 0 ]; then
+  FAILURES=$((FAILURES + 1))
+  printf 'FAIL no skill directories found under skills/\n' >&2
+fi
 
 # --- work: the hard stop and the tools it must reach for ---
 work="$SKILLS/work/SKILL.md"
@@ -2073,7 +2107,7 @@ are actually asking to be merged.
 bash tests/test-skills.sh
 ```
 
-Expected: PASS — `13 passed, 0 failed`.
+Expected: PASS — `14 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 
