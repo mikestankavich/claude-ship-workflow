@@ -528,11 +528,13 @@ assert_status 2 "bad subcommand exits 2" -- in_dir "$repo" "$BIN/csw-config" fro
 outside=$(mktemp -d)
 TMPDIRS+=("$outside")
 assert_status 3 "outside a git repo exits 3" -- in_dir "$outside" "$BIN/csw-config" json
+assert_status 3 "get outside a git repo exits 3, not a default value" -- in_dir "$outside" "$BIN/csw-config" get branchPattern
 
 repo=$(make_repo)
 mkdir -p "$repo/.claude"
 printf '{ not json\n' >"$repo/.claude/csw.json"
 assert_status 4 "malformed config exits 4" -- in_dir "$repo" "$BIN/csw-config" json
+assert_status 4 "get with malformed config exits 4, not unknown key" -- in_dir "$repo" "$BIN/csw-config" get branchPattern
 
 # --- syntactically valid JSON that is not an object is also a config error ---
 repo=$(make_repo)
@@ -625,8 +627,18 @@ config_path() {
 }
 
 effective() {
-  local p
-  p=$(config_path)
+  local p status
+  status=0
+  # Capture config_path's exit status explicitly rather than relying on
+  # `set -e` to abort here: when `effective` itself is invoked inside a
+  # command substitution (as `get` below does), bash runs it in a subshell
+  # where -e is off by default (there is no portable `inherit_errexit` on
+  # bash 3.2), so a bare `p=$(config_path)` would silently swallow a
+  # not-a-git-repo (3) failure and fall through to "no config, use defaults".
+  p=$(config_path) || status=$?
+  if [ "$status" -ne 0 ]; then
+    exit "$status"
+  fi
   if [ -z "$p" ]; then
     printf '%s' "$DEFAULTS" | jq '.'
     return 0
@@ -652,11 +664,12 @@ case "$cmd" in
     ;;
   get)
     if [ $# -ne 2 ]; then die "usage: csw-config get <key>" 2; fi
-    # A plain `json=$(effective)` is intentional here (not `if effective; then`):
-    # under set -e, a failing command substitution assignment still aborts the
-    # script with effective's own exit code (e.g. 4 for malformed config), so
-    # we don't need to re-derive that code ourselves.
-    json=$(effective)
+    # `effective` now checks config_path's exit status itself and calls
+    # `exit` directly on failure (see its definition above), so this
+    # `|| exit $?` is a second line of defence rather than the only one —
+    # either way, exit 3 (not a git repo) and exit 4 (malformed config)
+    # must reach the caller unchanged, not collapse into "unknown key".
+    json=$(effective) || exit $?
     # Test path *existence* rather than inferring it from the value, so a key
     # explicitly set to null is distinguishable from a key that is absent.
     exists=$(printf '%s' "$json" | jq -r --arg k "$2" '
@@ -685,7 +698,7 @@ chmod +x bin/csw-config
 bash tests/test-csw-config.sh
 ```
 
-Expected: PASS — `25 passed, 0 failed`.
+Expected: PASS — `27 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 
@@ -760,6 +773,38 @@ bare=$(make_repo)
 assert_status 2 "bare number without ticketPrefix exits 2" -- in_dir "$bare" "$BIN/csw-ticket" normalize 1088
 assert_eq "$(cd "$bare" && "$BIN/csw-ticket" normalize ENG-7)" "ENG-7" "explicit prefix works without config"
 
+# Team keys that contain digits (Linear/Jira style) must round-trip: normalize's
+# own output must be re-parseable by normalize, and number must strip only the
+# prefix, not everything up to the first dash.
+write_config "$repo" <<'JSON'
+{ "ticketPrefix": "K8S", "branchPattern": "<type>/<ticket>-<slug>" }
+JSON
+assert_eq "$("$BIN/csw-ticket" normalize 42)" "K8S-42" "digit-bearing prefix from a bare number"
+assert_eq "$("$BIN/csw-ticket" normalize K8S-42)" "K8S-42" "digit-bearing prefix round-trips"
+assert_eq "$("$BIN/csw-ticket" number K8S-42)" "42" "number strips a digit-bearing prefix, not up to the first dash"
+
+# An invalid configured ticketPrefix must fail loudly rather than mint a
+# reference normalize can't parse back.
+write_config "$repo" <<'JSON'
+{ "ticketPrefix": "1AB", "branchPattern": "<type>/<ticket>-<slug>" }
+JSON
+assert_status 2 "ticketPrefix starting with a digit exits 2" -- "$BIN/csw-ticket" normalize 42
+write_config "$repo" <<'JSON'
+{ "ticketPrefix": "TRA-X", "branchPattern": "<type>/<ticket>-<slug>" }
+JSON
+assert_status 2 "ticketPrefix containing a dash exits 2" -- "$BIN/csw-ticket" normalize 42
+
+# Reject every unparseable / ambiguous shape.
+write_config "$repo" <<'JSON'
+{ "ticketPrefix": "TRA", "branchPattern": "<type>/<ticket>-<slug>" }
+JSON
+assert_status 2 "prefix with no digits exits 2" -- "$BIN/csw-ticket" normalize "TRA-"
+assert_status 2 "leading dash exits 2" -- "$BIN/csw-ticket" normalize "-1088"
+assert_status 2 "double dash exits 2" -- "$BIN/csw-ticket" normalize "TRA--1088"
+assert_status 2 "leading digits exits 2" -- "$BIN/csw-ticket" normalize "12AB34"
+assert_status 2 "trailing extra segment exits 2" -- "$BIN/csw-ticket" normalize "TRA-1088-extra"
+assert_status 2 "unparseable words exit 2" -- "$BIN/csw-ticket" normalize "not a ticket"
+
 report
 ```
 
@@ -805,6 +850,16 @@ slugify() {
   printf '%s' "$s"
 }
 
+# A configured ticketPrefix must itself be parseable back out of a normalised
+# reference (letter, then letters/digits, no dash). Reject anything else here
+# rather than silently minting references normalize() cannot round-trip.
+validate_prefix() {
+  local p=$1
+  if [ -n "$p" ] && ! printf '%s' "$p" | grep -q '^[A-Za-z][A-Za-z0-9]*$'; then
+    die "invalid ticketPrefix in config: '$p' (must start with a letter, then letters or digits only)" 2
+  fi
+}
+
 normalize() {
   local raw prefix letters digits
   raw=$(printf '%s' "${1-}" | tr -d '[:space:]')
@@ -812,6 +867,7 @@ normalize() {
 
   if printf '%s' "$raw" | grep -q '^[0-9][0-9]*$'; then
     prefix=$(config get ticketPrefix)
+    validate_prefix "$prefix"
     if [ -z "$prefix" ]; then
       die "bare number '$raw' needs \"ticketPrefix\" in .claude/csw.json" 2
     fi
@@ -819,9 +875,25 @@ normalize() {
     return 0
   fi
 
-  if printf '%s' "$raw" | grep -q '^[A-Za-z][A-Za-z]*-\{0,1\}[0-9][0-9]*$'; then
-    letters=$(printf '%s' "$raw" | sed -e 's/[-0-9]//g' | tr '[:lower:]' '[:upper:]')
-    digits=$(printf '%s' "$raw" | sed -e 's/[^0-9]//g')
+  # Dashed: a prefix (which may itself contain digits, e.g. a "K8S" team key)
+  # followed by exactly one separating dash and a run of digits. Split on the
+  # LAST dash so a digit-bearing prefix is not mistaken for a malformed
+  # multi-segment reference.
+  if printf '%s' "$raw" | grep -q '^[A-Za-z][A-Za-z0-9]*-[0-9][0-9]*$'; then
+    letters=${raw%-*}
+    digits=${raw##*-}
+    letters=$(printf '%s' "$letters" | tr '[:lower:]' '[:upper:]')
+    printf '%s-%s\n' "$letters" "$digits"
+    return 0
+  fi
+
+  # Undashed: only unambiguous when the prefix is pure alphabetic (tra1088 ->
+  # TRA-1088). An undashed alphanumeric prefix like K8S42 is genuinely
+  # ambiguous about where the prefix ends and the ticket number begins, so it
+  # falls through to the rejection below.
+  if printf '%s' "$raw" | grep -q '^[A-Za-z][A-Za-z]*[0-9][0-9]*$'; then
+    letters=$(printf '%s' "$raw" | sed -e 's/[0-9].*$//' | tr '[:lower:]' '[:upper:]')
+    digits=$(printf '%s' "$raw" | sed -e 's/^[A-Za-z]*//')
     printf '%s-%s\n' "$letters" "$digits"
     return 0
   fi
@@ -837,7 +909,11 @@ case "$cmd" in
     ;;
   number)
     if [ $# -ne 2 ]; then die "usage: csw-ticket number <ref>" 2; fi
-    normalize "$2" | sed -e 's/^[A-Z]*-//'
+    # Strip everything up to and including the LAST dash (not a leading
+    # `[A-Z]*-`), so a prefix containing digits (K8S-42) still yields 42
+    # instead of being left untouched.
+    normalized=$(normalize "$2")
+    printf '%s\n' "${normalized##*-}"
     ;;
   slug)
     shift
@@ -876,7 +952,7 @@ chmod +x bin/csw-ticket
 bash tests/test-csw-ticket.sh
 ```
 
-Expected: PASS — `16 passed, 0 failed`.
+Expected: PASS — `29 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 

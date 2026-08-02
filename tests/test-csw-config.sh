@@ -49,11 +49,13 @@ assert_status 2 "bad subcommand exits 2" -- in_dir "$repo" "$BIN/csw-config" fro
 outside=$(mktemp -d)
 TMPDIRS+=("$outside")
 assert_status 3 "outside a git repo exits 3" -- in_dir "$outside" "$BIN/csw-config" json
+assert_status 3 "get outside a git repo exits 3, not a default value" -- in_dir "$outside" "$BIN/csw-config" get branchPattern
 
 repo=$(make_repo)
 mkdir -p "$repo/.claude"
 printf '{ not json\n' >"$repo/.claude/csw.json"
 assert_status 4 "malformed config exits 4" -- in_dir "$repo" "$BIN/csw-config" json
+assert_status 4 "get with malformed config exits 4, not unknown key" -- in_dir "$repo" "$BIN/csw-config" get branchPattern
 
 # --- syntactically valid JSON that is not an object is also a config error ---
 repo=$(make_repo)

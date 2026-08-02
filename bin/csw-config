@@ -49,8 +49,18 @@ config_path() {
 }
 
 effective() {
-  local p
-  p=$(config_path)
+  local p status
+  status=0
+  # Capture config_path's exit status explicitly rather than relying on
+  # `set -e` to abort here: when `effective` itself is invoked inside a
+  # command substitution (as `get` below does), bash runs it in a subshell
+  # where -e is off by default (there is no portable `inherit_errexit` on
+  # bash 3.2), so a bare `p=$(config_path)` would silently swallow a
+  # not-a-git-repo (3) failure and fall through to "no config, use defaults".
+  p=$(config_path) || status=$?
+  if [ "$status" -ne 0 ]; then
+    exit "$status"
+  fi
   if [ -z "$p" ]; then
     printf '%s' "$DEFAULTS" | jq '.'
     return 0
@@ -76,11 +86,12 @@ case "$cmd" in
     ;;
   get)
     if [ $# -ne 2 ]; then die "usage: csw-config get <key>" 2; fi
-    # A plain `json=$(effective)` is intentional here (not `if effective; then`):
-    # under set -e, a failing command substitution assignment still aborts the
-    # script with effective's own exit code (e.g. 4 for malformed config), so
-    # we don't need to re-derive that code ourselves.
-    json=$(effective)
+    # `effective` now checks config_path's exit status itself and calls
+    # `exit` directly on failure (see its definition above), so this
+    # `|| exit $?` is a second line of defence rather than the only one —
+    # either way, exit 3 (not a git repo) and exit 4 (malformed config)
+    # must reach the caller unchanged, not collapse into "unknown key".
+    json=$(effective) || exit $?
     # Test path *existence* rather than inferring it from the value, so a key
     # explicitly set to null is distinguishable from a key that is absent.
     exists=$(printf '%s' "$json" | jq -r --arg k "$2" '

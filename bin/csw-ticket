@@ -27,6 +27,16 @@ slugify() {
   printf '%s' "$s"
 }
 
+# A configured ticketPrefix must itself be parseable back out of a normalised
+# reference (letter, then letters/digits, no dash). Reject anything else here
+# rather than silently minting references normalize() cannot round-trip.
+validate_prefix() {
+  local p=$1
+  if [ -n "$p" ] && ! printf '%s' "$p" | grep -q '^[A-Za-z][A-Za-z0-9]*$'; then
+    die "invalid ticketPrefix in config: '$p' (must start with a letter, then letters or digits only)" 2
+  fi
+}
+
 normalize() {
   local raw prefix letters digits
   raw=$(printf '%s' "${1-}" | tr -d '[:space:]')
@@ -34,6 +44,7 @@ normalize() {
 
   if printf '%s' "$raw" | grep -q '^[0-9][0-9]*$'; then
     prefix=$(config get ticketPrefix)
+    validate_prefix "$prefix"
     if [ -z "$prefix" ]; then
       die "bare number '$raw' needs \"ticketPrefix\" in .claude/csw.json" 2
     fi
@@ -41,9 +52,25 @@ normalize() {
     return 0
   fi
 
-  if printf '%s' "$raw" | grep -q '^[A-Za-z][A-Za-z]*-\{0,1\}[0-9][0-9]*$'; then
-    letters=$(printf '%s' "$raw" | sed -e 's/[-0-9]//g' | tr '[:lower:]' '[:upper:]')
-    digits=$(printf '%s' "$raw" | sed -e 's/[^0-9]//g')
+  # Dashed: a prefix (which may itself contain digits, e.g. a "K8S" team key)
+  # followed by exactly one separating dash and a run of digits. Split on the
+  # LAST dash so a digit-bearing prefix is not mistaken for a malformed
+  # multi-segment reference.
+  if printf '%s' "$raw" | grep -q '^[A-Za-z][A-Za-z0-9]*-[0-9][0-9]*$'; then
+    letters=${raw%-*}
+    digits=${raw##*-}
+    letters=$(printf '%s' "$letters" | tr '[:lower:]' '[:upper:]')
+    printf '%s-%s\n' "$letters" "$digits"
+    return 0
+  fi
+
+  # Undashed: only unambiguous when the prefix is pure alphabetic (tra1088 ->
+  # TRA-1088). An undashed alphanumeric prefix like K8S42 is genuinely
+  # ambiguous about where the prefix ends and the ticket number begins, so it
+  # falls through to the rejection below.
+  if printf '%s' "$raw" | grep -q '^[A-Za-z][A-Za-z]*[0-9][0-9]*$'; then
+    letters=$(printf '%s' "$raw" | sed -e 's/[0-9].*$//' | tr '[:lower:]' '[:upper:]')
+    digits=$(printf '%s' "$raw" | sed -e 's/^[A-Za-z]*//')
     printf '%s-%s\n' "$letters" "$digits"
     return 0
   fi
@@ -59,7 +86,11 @@ case "$cmd" in
     ;;
   number)
     if [ $# -ne 2 ]; then die "usage: csw-ticket number <ref>" 2; fi
-    normalize "$2" | sed -e 's/^[A-Z]*-//'
+    # Strip everything up to and including the LAST dash (not a leading
+    # `[A-Z]*-`), so a prefix containing digits (K8S-42) still yields 42
+    # instead of being left untouched.
+    normalized=$(normalize "$2")
+    printf '%s\n' "${normalized##*-}"
     ;;
   slug)
     shift
