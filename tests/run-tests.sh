@@ -14,6 +14,7 @@ done
 failed=0
 for t in tests/test-*.sh; do
   [ -f "$t" ] || continue
+  case "$t" in */test-helpers.sh) continue ;; esac
   printf '\n=== %s ===\n' "$t"
   if bash "$t"; then
     printf 'ok   %s\n' "$t"
