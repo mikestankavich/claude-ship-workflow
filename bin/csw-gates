@@ -60,9 +60,30 @@ case "${1:-}" in
     files=$(cat)
     ;;
   *)
-    files=$(git diff --name-only "$1...HEAD") || die "cannot diff $1...HEAD" 2
+    # Silence git's own error output (a ~50-line usage dump on a bad ref, or
+    # a "not a git repository" warning outside one) so only this script's own
+    # die() message reaches the user.
+    files=$(git diff --name-only "$1...HEAD" 2>/dev/null) || die "cannot diff $1...HEAD" 2
     ;;
 esac
+
+# Blank lines are never real paths. Strip them before anything tries to match
+# against them: `printf '%s\n' "$files"` turns an empty `$files` (a zero-file
+# diff, or empty stdin) into exactly one blank line, and `grep -Eq` happily
+# matches that blank line against any glob that can match the empty string —
+# `**`, `*`, `*.sql`, etc. — so a catch-all gate would otherwise fire on a
+# no-op diff. Filtering here also means a file list with blank lines
+# interleaved among real paths (`a.txt`, ``, `b.txt`) matches exactly as if
+# the blank lines were absent, since every match below reads this same
+# already-filtered `$files`.
+files=$(printf '%s\n' "$files" | grep -v '^$') || files=''
+
+# Nothing to match against: print nothing and exit 0 without evaluating any
+# gate — not even a malformed-config check, since there is nothing a gate
+# could have fired on either way.
+if [ -z "$files" ]; then
+  exit 0
+fi
 
 gates=$("$HERE/csw-config" get gates)
 

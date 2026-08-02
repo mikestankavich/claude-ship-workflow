@@ -119,6 +119,13 @@ JSON
 assert_status 4 "a gates entry missing run exits 4 rather than silently skipping" -- \
   sh -c "cd '$bad_missing' && printf 'foo/x\n' | '$BIN/csw-gates' --files"
 
+bad_missing_when=$(make_repo)
+write_config "$bad_missing_when" <<'JSON'
+{ "gates": [ { "run": "just foo" } ] }
+JSON
+assert_status 4 "a gates entry missing when exits 4 rather than silently skipping" -- \
+  sh -c "cd '$bad_missing_when' && printf 'foo/x\n' | '$BIN/csw-gates' --files"
+
 # A valid gates array still behaves exactly as before.
 good=$(make_repo)
 write_config "$good" <<'JSON'
@@ -126,5 +133,63 @@ write_config "$good" <<'JSON'
 JSON
 assert_eq "$(cd "$good" && printf 'foo/x\n' | "$BIN/csw-gates" --files)" "just foo" \
   "a valid gates array still matches as before"
+
+# An empty file list must never match a catch-all glob (fix round 3):
+# `printf '%s\n' "$files"` turns a truly empty `$files` into one blank line,
+# and `grep -Eq` would otherwise happily match that blank line against any
+# glob that can match the empty string, like `**` or `*`.
+catchall_star=$(make_repo)
+write_config "$catchall_star" <<'JSON'
+{ "gates": [{ "when": "**", "run": "cmd-catchall" }] }
+JSON
+assert_eq "$(cd "$catchall_star" && printf '' | "$BIN/csw-gates" --files)" "" \
+  "empty stdin with when ** produces no output"
+assert_status 0 "empty stdin with when ** still exits 0" -- \
+  sh -c "cd '$catchall_star' && printf '' | '$BIN/csw-gates' --files"
+
+catchall_single=$(make_repo)
+write_config "$catchall_single" <<'JSON'
+{ "gates": [{ "when": "*", "run": "cmd-catchall" }] }
+JSON
+assert_eq "$(cd "$catchall_single" && printf '' | "$BIN/csw-gates" --files)" "" \
+  "empty stdin with when * produces no output"
+assert_status 0 "empty stdin with when * still exits 0" -- \
+  sh -c "cd '$catchall_single' && printf '' | '$BIN/csw-gates' --files"
+
+# Same bug, diff mode: a branch with zero changed files must not fire a
+# catch-all gate either.
+nochange=$(make_repo)
+write_config "$nochange" <<'JSON'
+{ "gates": [{ "when": "**", "run": "cmd-catchall" }] }
+JSON
+git -C "$nochange" checkout -q -b feat/nochange
+assert_eq "$(cd "$nochange" && "$BIN/csw-gates" main)" "" \
+  "diff mode with zero changed files produces no output"
+assert_status 0 "diff mode with zero changed files still exits 0" -- \
+  sh -c "cd '$nochange' && '$BIN/csw-gates' main"
+
+# Non-empty diff still fires a catch-all glob — the fix must not swing the
+# other way and break `**`/`*` entirely.
+assert_eq "$(cd "$catchall_star" && printf 'anything.txt\n' | "$BIN/csw-gates" --files)" \
+  "cmd-catchall" "a real change still fires a catch-all when **"
+
+# A file list with blank lines interleaved among real paths must match
+# exactly as if the blank lines were absent.
+blanks=$(make_repo)
+write_config "$blanks" <<'JSON'
+{ "gates": [{ "when": "a.txt", "run": "cmd-a" }, { "when": "b.txt", "run": "cmd-b" }] }
+JSON
+assert_eq "$(cd "$blanks" && printf 'a.txt\n\nb.txt\n' | "$BIN/csw-gates" --files)" \
+  "cmd-a
+cmd-b" "blank lines interleaved among real paths do not change matching"
+
+# A bad base ref exits 2, and only this script's own message reaches
+# stderr — git's own ~50-line usage dump must not leak through.
+badref=$(make_repo)
+assert_status 2 "bad base ref exits 2" -- \
+  sh -c "cd '$badref' && '$BIN/csw-gates' totally-bogus-ref-xyz"
+badref_stderr=$(cd "$badref" && "$BIN/csw-gates" totally-bogus-ref-xyz 2>&1 >/dev/null)
+assert_eq "$badref_stderr" 'csw-gates: cannot diff totally-bogus-ref-xyz...HEAD' \
+  "bad base ref stderr is only the csw-gates message, no git usage block"
 
 report

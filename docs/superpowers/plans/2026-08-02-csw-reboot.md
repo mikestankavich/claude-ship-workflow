@@ -984,6 +984,10 @@ prose the assistant has to remember.
   `4` malformed config — `gates` is not an array, a `gates` entry is not an object, or an
   object entry is missing `when` or `run`. `3` (not in a git repository) propagates unchanged
   from `csw-config`.
+- Blank lines in the file list (from either source) are stripped before any matching happens.
+  An empty file list — a zero-file diff, or empty `--files` stdin — prints nothing and exits 0
+  without evaluating any gate or fetching the config, so a catch-all `when` like `**` or `*`
+  can never false-match a no-op diff.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1111,6 +1115,13 @@ JSON
 assert_status 4 "a gates entry missing run exits 4 rather than silently skipping" -- \
   sh -c "cd '$bad_missing' && printf 'foo/x\n' | '$BIN/csw-gates' --files"
 
+bad_missing_when=$(make_repo)
+write_config "$bad_missing_when" <<'JSON'
+{ "gates": [ { "run": "just foo" } ] }
+JSON
+assert_status 4 "a gates entry missing when exits 4 rather than silently skipping" -- \
+  sh -c "cd '$bad_missing_when' && printf 'foo/x\n' | '$BIN/csw-gates' --files"
+
 # A valid gates array still behaves exactly as before.
 good=$(make_repo)
 write_config "$good" <<'JSON'
@@ -1118,6 +1129,64 @@ write_config "$good" <<'JSON'
 JSON
 assert_eq "$(cd "$good" && printf 'foo/x\n' | "$BIN/csw-gates" --files)" "just foo" \
   "a valid gates array still matches as before"
+
+# An empty file list must never match a catch-all glob (fix round 3):
+# `printf '%s\n' "$files"` turns a truly empty `$files` into one blank line,
+# and `grep -Eq` would otherwise happily match that blank line against any
+# glob that can match the empty string, like `**` or `*`.
+catchall_star=$(make_repo)
+write_config "$catchall_star" <<'JSON'
+{ "gates": [{ "when": "**", "run": "cmd-catchall" }] }
+JSON
+assert_eq "$(cd "$catchall_star" && printf '' | "$BIN/csw-gates" --files)" "" \
+  "empty stdin with when ** produces no output"
+assert_status 0 "empty stdin with when ** still exits 0" -- \
+  sh -c "cd '$catchall_star' && printf '' | '$BIN/csw-gates' --files"
+
+catchall_single=$(make_repo)
+write_config "$catchall_single" <<'JSON'
+{ "gates": [{ "when": "*", "run": "cmd-catchall" }] }
+JSON
+assert_eq "$(cd "$catchall_single" && printf '' | "$BIN/csw-gates" --files)" "" \
+  "empty stdin with when * produces no output"
+assert_status 0 "empty stdin with when * still exits 0" -- \
+  sh -c "cd '$catchall_single' && printf '' | '$BIN/csw-gates' --files"
+
+# Same bug, diff mode: a branch with zero changed files must not fire a
+# catch-all gate either.
+nochange=$(make_repo)
+write_config "$nochange" <<'JSON'
+{ "gates": [{ "when": "**", "run": "cmd-catchall" }] }
+JSON
+git -C "$nochange" checkout -q -b feat/nochange
+assert_eq "$(cd "$nochange" && "$BIN/csw-gates" main)" "" \
+  "diff mode with zero changed files produces no output"
+assert_status 0 "diff mode with zero changed files still exits 0" -- \
+  sh -c "cd '$nochange' && '$BIN/csw-gates' main"
+
+# Non-empty diff still fires a catch-all glob — the fix must not swing the
+# other way and break `**`/`*` entirely.
+assert_eq "$(cd "$catchall_star" && printf 'anything.txt\n' | "$BIN/csw-gates" --files)" \
+  "cmd-catchall" "a real change still fires a catch-all when **"
+
+# A file list with blank lines interleaved among real paths must match
+# exactly as if the blank lines were absent.
+blanks=$(make_repo)
+write_config "$blanks" <<'JSON'
+{ "gates": [{ "when": "a.txt", "run": "cmd-a" }, { "when": "b.txt", "run": "cmd-b" }] }
+JSON
+assert_eq "$(cd "$blanks" && printf 'a.txt\n\nb.txt\n' | "$BIN/csw-gates" --files)" \
+  "cmd-a
+cmd-b" "blank lines interleaved among real paths do not change matching"
+
+# A bad base ref exits 2, and only this script's own message reaches
+# stderr — git's own ~50-line usage dump must not leak through.
+badref=$(make_repo)
+assert_status 2 "bad base ref exits 2" -- \
+  sh -c "cd '$badref' && '$BIN/csw-gates' totally-bogus-ref-xyz"
+badref_stderr=$(cd "$badref" && "$BIN/csw-gates" totally-bogus-ref-xyz 2>&1 >/dev/null)
+assert_eq "$badref_stderr" 'csw-gates: cannot diff totally-bogus-ref-xyz...HEAD' \
+  "bad base ref stderr is only the csw-gates message, no git usage block"
 
 report
 ```
@@ -1197,9 +1266,30 @@ case "${1:-}" in
     files=$(cat)
     ;;
   *)
-    files=$(git diff --name-only "$1...HEAD") || die "cannot diff $1...HEAD" 2
+    # Silence git's own error output (a ~50-line usage dump on a bad ref, or
+    # a "not a git repository" warning outside one) so only this script's own
+    # die() message reaches the user.
+    files=$(git diff --name-only "$1...HEAD" 2>/dev/null) || die "cannot diff $1...HEAD" 2
     ;;
 esac
+
+# Blank lines are never real paths. Strip them before anything tries to match
+# against them: `printf '%s\n' "$files"` turns an empty `$files` (a zero-file
+# diff, or empty stdin) into exactly one blank line, and `grep -Eq` happily
+# matches that blank line against any glob that can match the empty string —
+# `**`, `*`, `*.sql`, etc. — so a catch-all gate would otherwise fire on a
+# no-op diff. Filtering here also means a file list with blank lines
+# interleaved among real paths (`a.txt`, ``, `b.txt`) matches exactly as if
+# the blank lines were absent, since every match below reads this same
+# already-filtered `$files`.
+files=$(printf '%s\n' "$files" | grep -v '^$') || files=''
+
+# Nothing to match against: print nothing and exit 0 without evaluating any
+# gate — not even a malformed-config check, since there is nothing a gate
+# could have fired on either way.
+if [ -z "$files" ]; then
+  exit 0
+fi
 
 gates=$("$HERE/csw-config" get gates)
 
@@ -1261,6 +1351,15 @@ task-5-report.md for why (the brief's own shipped test never asserted the
 skip behavior, and silently not running a configured gate is the exact
 failure this program exists to prevent).
 
+The blank-line normalization and empty-file-list short circuit (fix round 3
+in task-5-report.md) close a Critical: an empty diff used to false-match any
+`when` glob that can match the empty string (`**`, `*`, ...), silently
+firing a catch-all gate — e.g. a Playwright-against-preview run — on a no-op
+diff. The fix strips blank lines from the file list before any matching
+happens (in both `--files` and diff mode) and exits 0 with no output as soon
+as the filtered list is empty, before fetching config or evaluating any
+gate.
+
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
@@ -1268,7 +1367,7 @@ chmod +x bin/csw-gates
 bash tests/test-csw-gates.sh
 ```
 
-Expected: PASS — `29 passed, 0 failed`.
+Expected: PASS — `40 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 
