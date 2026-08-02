@@ -39,6 +39,21 @@ creation and works by presenting a three-option menu that this workflow override
 memory file on every project. The gap is real: nothing covers merge-after-review, tracker
 state, or cleanup.
 
+### Prior art worth mining before implementing
+
+Not for architecture — the policy half is what makes this idiosyncratic, and the git half is
+about fifteen lines of `git` and `gh`, some of which is a single flag (`gh pr merge --merge
+--delete-branch`). But other people's production experience with the *edge cases* is worth
+an hour:
+
+- **Worktree Finish** and **End Session** (mcpmarket) — pre-flight checks, uncommitted
+  changes at cleanup, orphaned worktrees, detached HEAD. mcpmarket returns 429 to automated
+  fetches; pull the equivalents from the GitHub-hosted skill collections instead.
+- **git-town** — the mature non-AI answer for the git mechanics. Note issue #6083 (March
+  2026): `sync` fails to detect a shipped parent branch when it is held by a worktree. A
+  dedicated tool with years of investment still has rough edges at exactly the
+  worktree-plus-shipped intersection this workflow lives in. Expect to hit it.
+
 ## Scope
 
 In scope: the autonomous dispatch flavor, the merge, the cleanup, and (stage two) a batch
@@ -173,8 +188,13 @@ to be reconstructed by hand across the tracker.
 ## Migration from v0.4.0
 
 Current HEAD is `0.4.0`, tagged `v0.1.0` only. Before deleting anything, tag current HEAD
-`v0.4.0` so the old framework stays installable for anyone using it. The reboot ships as
-`1.0.0`.
+`v0.4.0` — as archaeology, not as an offer. The README must state plainly that v0.x is
+unmaintained, superseded, and likely wrong in places, and should not be installed. A bare
+tag sitting next to a 1.0.0 release otherwise reads as "the old stable version," which is
+the wrong signal for code nobody has maintained in months. The reboot ships as `1.0.0`.
+
+The only two known users are the author and a contract developer who has already been told
+to move to superpowers, so there is no migration path to write.
 
 Repo renames to `claude-ship-workflow`; GitHub keeps redirects. History, issues, PR record,
 CHANGELOG, and MIT license all carry over — nothing is copied, and the reboot reads as a
