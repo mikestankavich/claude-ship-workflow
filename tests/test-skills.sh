@@ -33,7 +33,22 @@ for dir in "$SKILLS"/*/; do
     continue
   fi
 
-  assert_eq "$(head -1 "$file")" "---" "$name: starts with frontmatter"
+  first_line=$(head -1 "$file")
+  delim_count=$(grep -c '^---$' "$file" || true)
+
+  assert_eq "$first_line" "---" "$name: starts with frontmatter"
+
+  # Guard the shape before trusting frontmatter()/fm_field(): with only one
+  # "---" line, the sed range runs to EOF and body text reads as frontmatter
+  # fields. Require an opening "---" on line 1 and a second "---" to close
+  # the block; otherwise record the failure and skip parsing this file's
+  # fields rather than reading its body as frontmatter.
+  if [ "$first_line" != "---" ] || [ "$delim_count" -lt 2 ]; then
+    FAILURES=$((FAILURES + 1))
+    printf 'FAIL %s: malformed frontmatter block (no closing ---)\n' "$name" >&2
+    continue
+  fi
+
   assert_eq "$(fm_field "$file" name)" "$name" "$name: frontmatter name matches its directory"
 
   desc=$(fm_field "$file" description)
@@ -73,6 +88,7 @@ assert_contains "$(cat "$work")" "csw-gates" "work: runs diff-triggered gates"
 assert_contains "$(cat "$work")" "EnterWorktree" "work: prefers the native worktree tool"
 assert_contains "$(cat "$work")" "--draft" "work: knows the draft-PR rule"
 assert_contains "$(cat "$work")" "Hold for review is a hard stop" "work: states the hard stop"
+assert_contains "$(cat "$work")" "No PR means Step 9, not Step 8" "work: Step 7 failures route to Step 9"
 if grep -q "gh pr merge" "$work"; then
   FAILURES=$((FAILURES + 1))
   printf 'FAIL work: must never merge\n' >&2

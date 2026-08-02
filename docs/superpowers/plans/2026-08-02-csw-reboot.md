@@ -1882,7 +1882,22 @@ for dir in "$SKILLS"/*/; do
     continue
   fi
 
-  assert_eq "$(head -1 "$file")" "---" "$name: starts with frontmatter"
+  first_line=$(head -1 "$file")
+  delim_count=$(grep -c '^---$' "$file" || true)
+
+  assert_eq "$first_line" "---" "$name: starts with frontmatter"
+
+  # Guard the shape before trusting frontmatter()/fm_field(): with only one
+  # "---" line, the sed range runs to EOF and body text reads as frontmatter
+  # fields. Require an opening "---" on line 1 and a second "---" to close
+  # the block; otherwise record the failure and skip parsing this file's
+  # fields rather than reading its body as frontmatter.
+  if [ "$first_line" != "---" ] || [ "$delim_count" -lt 2 ]; then
+    FAILURES=$((FAILURES + 1))
+    printf 'FAIL %s: malformed frontmatter block (no closing ---)\n' "$name" >&2
+    continue
+  fi
+
   assert_eq "$(fm_field "$file" name)" "$name" "$name: frontmatter name matches its directory"
 
   desc=$(fm_field "$file" description)
@@ -1922,6 +1937,7 @@ assert_contains "$(cat "$work")" "csw-gates" "work: runs diff-triggered gates"
 assert_contains "$(cat "$work")" "EnterWorktree" "work: prefers the native worktree tool"
 assert_contains "$(cat "$work")" "--draft" "work: knows the draft-PR rule"
 assert_contains "$(cat "$work")" "Hold for review is a hard stop" "work: states the hard stop"
+assert_contains "$(cat "$work")" "No PR means Step 9, not Step 8" "work: Step 7 failures route to Step 9"
 if grep -q "gh pr merge" "$work"; then
   FAILURES=$((FAILURES + 1))
   printf 'FAIL work: must never merge\n' >&2
@@ -2062,6 +2078,15 @@ gh pr create --fill --base "<baseBranch>" \
   --body "<summary, then 'Closes <TICKET>' or 'Refs <TICKET>'>"
 ```
 
+If `git push` is rejected because the remote moved, pull, rebase, and push again — once. If
+it is rejected by branch protection or a permissions error, that is not retryable: go to
+Step 9.
+
+If `gh pr create` fails for any reason, go to Step 9. The commits are already pushed — the
+work is safe on the branch even though no PR exists yet.
+
+Step 8 needs a real PR URL in hand. No PR means Step 9, not Step 8.
+
 ## Step 8: Stop
 
 **Hold for review is a hard stop, not a checkpoint to talk past.** Report:
@@ -2076,7 +2101,8 @@ message said "then merge" — that message was written before anyone saw the dif
 ## Step 9: When it does not reach merge-ready
 
 Failed validation you could not fix, a partial implementation, an approach that ran out of
-road, or a question only a human can answer. In every one of those cases:
+road, a question only a human can answer, or a commit, push, or PR-create that failed and
+would not retry. In every one of those cases:
 
 1. Write the question or the blocker as a comment on the ticket.
 2. Push a **draft** PR carrying the work so far: `gh pr create --draft ...`, referencing the
@@ -2107,7 +2133,7 @@ are actually asking to be merged.
 bash tests/test-skills.sh
 ```
 
-Expected: PASS — `14 passed, 0 failed`.
+Expected: PASS — `15 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 

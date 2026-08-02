@@ -114,6 +114,15 @@ gh pr create --fill --base "<baseBranch>" \
   --body "<summary, then 'Closes <TICKET>' or 'Refs <TICKET>'>"
 ```
 
+If `git push` is rejected because the remote moved, pull, rebase, and push again — once. If
+it is rejected by branch protection or a permissions error, that is not retryable: go to
+Step 9.
+
+If `gh pr create` fails for any reason, go to Step 9. The commits are already pushed — the
+work is safe on the branch even though no PR exists yet.
+
+Step 8 needs a real PR URL in hand. No PR means Step 9, not Step 8.
+
 ## Step 8: Stop
 
 **Hold for review is a hard stop, not a checkpoint to talk past.** Report:
@@ -128,7 +137,8 @@ message said "then merge" — that message was written before anyone saw the dif
 ## Step 9: When it does not reach merge-ready
 
 Failed validation you could not fix, a partial implementation, an approach that ran out of
-road, or a question only a human can answer. In every one of those cases:
+road, a question only a human can answer, or a commit, push, or PR-create that failed and
+would not retry. In every one of those cases:
 
 1. Write the question or the blocker as a comment on the ticket.
 2. Push a **draft** PR carrying the work so far: `gh pr create --draft ...`, referencing the
