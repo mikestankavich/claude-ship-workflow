@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# csw-ticket — normalise ticket references and derive branch names.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+
+die() { printf 'csw-ticket: %s\n' "$1" >&2; exit "$2"; }
+config() { "$HERE/csw-config" "$@"; }
+
+usage() {
+  cat <<'EOF'
+Usage:
+  csw-ticket normalize <ref>                 1088 | tra-1088 | TRA-1088  ->  TRA-1088
+  csw-ticket number <ref>                    TRA-1088                    ->  1088
+  csw-ticket slug <words...>                 "Add nav vocabulary"        ->  add-nav-vocabulary
+  csw-ticket branch <type> <ref> <title...>  feat TRA-1088 "Add nav ..." ->  feat/tra-1088-add-nav-vocabulary
+EOF
+}
+
+slugify() {
+  local s
+  s=$(printf '%s' "$*" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -e 's/[^a-z0-9]\{1,\}/-/g' -e 's/^-\{1,\}//' -e 's/-\{1,\}$//')
+  # Truncate to 40 characters, then drop a dash the cut may have left dangling.
+  s=$(printf '%s' "$s" | cut -c1-40 | sed -e 's/-\{1,\}$//')
+  printf '%s' "$s"
+}
+
+normalize() {
+  local raw prefix letters digits
+  raw=$(printf '%s' "${1-}" | tr -d '[:space:]')
+  if [ -z "$raw" ]; then die "empty ticket reference" 2; fi
+
+  if printf '%s' "$raw" | grep -q '^[0-9][0-9]*$'; then
+    prefix=$(config get ticketPrefix)
+    if [ -z "$prefix" ]; then
+      die "bare number '$raw' needs \"ticketPrefix\" in .claude/csw.json" 2
+    fi
+    printf '%s-%s\n' "$prefix" "$raw"
+    return 0
+  fi
+
+  if printf '%s' "$raw" | grep -q '^[A-Za-z][A-Za-z]*-\{0,1\}[0-9][0-9]*$'; then
+    letters=$(printf '%s' "$raw" | sed -e 's/[-0-9]//g' | tr '[:lower:]' '[:upper:]')
+    digits=$(printf '%s' "$raw" | sed -e 's/[^0-9]//g')
+    printf '%s-%s\n' "$letters" "$digits"
+    return 0
+  fi
+
+  die "not a ticket reference: ${1-}" 2
+}
+
+cmd=${1:-}
+case "$cmd" in
+  normalize)
+    if [ $# -ne 2 ]; then die "usage: csw-ticket normalize <ref>" 2; fi
+    normalize "$2"
+    ;;
+  number)
+    if [ $# -ne 2 ]; then die "usage: csw-ticket number <ref>" 2; fi
+    normalize "$2" | sed -e 's/^[A-Z]*-//'
+    ;;
+  slug)
+    shift
+    if [ $# -eq 0 ]; then die "usage: csw-ticket slug <words...>" 2; fi
+    slug=$(slugify "$@")
+    if [ -z "$slug" ]; then die "title produced an empty slug" 2; fi
+    printf '%s\n' "$slug"
+    ;;
+  branch)
+    if [ $# -lt 4 ]; then die "usage: csw-ticket branch <type> <ref> <title...>" 2; fi
+    type=$2
+    ticket=$(normalize "$3")
+    shift 3
+    slug=$(slugify "$@")
+    if [ -z "$slug" ]; then die "title produced an empty slug" 2; fi
+    pattern=$(config get branchPattern)
+    lower=$(printf '%s' "$ticket" | tr '[:upper:]' '[:lower:]')
+    out=${pattern//<type>/$type}
+    out=${out//<ticket>/$lower}
+    out=${out//<slug>/$slug}
+    printf '%s\n' "$out"
+    ;;
+  ''|-h|--help)
+    usage
+    ;;
+  *)
+    die "unknown subcommand: $cmd" 2
+    ;;
+esac
