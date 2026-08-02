@@ -1103,15 +1103,10 @@ git checkout -q main
 git worktree add -q "$repo/.claude/worktrees/merged" feat/merged
 git worktree add -q "$repo/.claude/worktrees/unmerged" feat/unmerged
 worktrees=$("$BIN/csw-sweep" worktrees)
-assert_contains "$worktrees" ".claude/worktrees/merged" "worktree on a merged branch is swept"
-case "$worktrees" in
-  *.claude/worktrees/unmerged*) assert_eq "unmerged-wt-listed" "not-listed" "worktree on unmerged work must not be swept" ;;
-  *) PASSES=$((PASSES + 1)) ;;
-esac
-case "$worktrees" in
-  *"$repo	"*) assert_eq "main-wt-listed" "not-listed" "the main worktree is never swept" ;;
-  *) PASSES=$((PASSES + 1)) ;;
-esac
+assert_contains "$worktrees" "worktrees/merged" "worktree on a merged branch is swept"
+# Exactly one line: not the unmerged worktree, and not the main worktree.
+assert_eq "$(printf '%s' "$worktrees" | grep -c . || true)" "1" \
+  "only the merged worktree is swept"
 
 # A clean repo sweeps to nothing, and still exits 0.
 clean=$(make_repo)
@@ -1532,14 +1527,9 @@ assert_contains "$(cat "$merge")" "gh pr checks" "merge: checks CI"
 assert_contains "$(cat "$merge")" "gh pr merge" "merge: merges the PR"
 assert_contains "$(cat "$merge")" "--merge --delete-branch" "merge: merge commit, delete the remote branch"
 assert_contains "$(cat "$merge")" "csw:cleanup" "merge: chains into cleanup"
-for forbidden in "--squash" "--rebase"; do
-  if grep -q -- "$forbidden $" "$merge" || grep -qE "gh pr merge[^\n]*\\$forbidden" "$merge"; then
-    FAILURES=$((FAILURES + 1))
-    printf 'FAIL merge: uses %s\n' "$forbidden" >&2
-  else
-    PASSES=$((PASSES + 1))
-  fi
-done
+# The skill may *mention* --squash to forbid it; it must never *use* it.
+bad_flags=$(grep "gh pr merge" "$merge" | grep -E -- "--squash|--rebase" || true)
+assert_eq "$bad_flags" "" "merge: no gh pr merge line uses --squash or --rebase"
 assert_eq "$(fm_field "$merge" 'disable-model-invocation')" "" "merge: stays model-invocable"
 ```
 
@@ -2321,9 +2311,11 @@ for gone in "/csw:spec" "/csw:plan" "/csw:build" "/csw:ship"; do
   fi
 done
 
-# Every default key must be documented.
+# Every default key must be documented, including the nested batch keys.
 repo=$(make_repo)
-for key in $(cd "$repo" && "$BIN/csw-config" json | jq -r 'paths(scalars != null) | join(".")' | sort -u); do
+top_keys=$(in_dir "$repo" "$BIN/csw-config" json | jq -r 'keys[]')
+batch_keys=$(in_dir "$repo" "$BIN/csw-config" json | jq -r '.batch | keys[] | "batch." + .')
+for key in $top_keys $batch_keys; do
   assert_contains "$(cat "$config_doc")" "$key" "configuration.md documents $key"
 done
 
@@ -2377,6 +2369,9 @@ and local settings stay out:
 .claude/settings.local.json
 .claude/data/
 
+# Subagent-driven development scratch
+.superpowers/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -2384,6 +2379,9 @@ Thumbs.db
 # Local environment (secrets/local config)
 .env.local
 ```
+
+`.superpowers/` must stay ignored — it holds the execution scratch for this very plan, and
+un-ignoring it would commit the ledger and review packages into the release.
 
 Verify before going further — an unignored worktree directory commits the whole tree:
 
@@ -2774,11 +2772,22 @@ Then, in a Claude Code session, add the local marketplace and confirm `/csw:work
 Record the result. If the commands do not appear under the `csw:` prefix, the plugin name in
 `.claude-plugin/plugin.json` is wrong — that is the only thing that sets the namespace.
 
-- [ ] **Step 4: Commit and open the PR**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add tests/test-integration.sh
 git commit -m "test: add end-to-end verification of the example config and plugin layout"
+```
+
+- [ ] **Step 5: Hand off — the branch owner opens the PR**
+
+Do not push or open the PR from inside this task. The branch is finished as a whole, after
+the final whole-branch review, using superpowers:finishing-a-development-branch. Report that
+the integration test is green and the branch is ready.
+
+For reference, the PR the branch owner will open:
+
+```bash
 git push -u origin feat/csw-reboot-superpowers
 gh pr create --base main \
   --title "feat!: reboot CSW as Claude Ship Workflow 1.0.0" \
@@ -2814,9 +2823,7 @@ BODY
 )"
 ```
 
-- [ ] **Step 5: Stop for review**
-
-Report the PR URL and what is worth testing by hand. Do not merge.
+Once it is open, report the PR URL and what is worth testing by hand. Do not merge.
 
 ---
 

@@ -13,5 +13,8 @@ Thumbs.db
 # Testing
 .spec/
 
+# Subagent-driven development scratch
+.superpowers/
+
 # Local environment (secrets/local config)
 .env.local
