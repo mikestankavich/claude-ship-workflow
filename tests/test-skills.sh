@@ -109,4 +109,14 @@ assert_eq "$(fm_field "$merge" 'disable-model-invocation')" "" "merge: stays mod
 assert_contains "$(cat "$merge")" "only ever entered after a confirmed merge" "merge: cleanup gated on a confirmed merge"
 assert_contains "$(cat "$merge")" "BLOCKED" "merge: covers mergeStateStatus BLOCKED"
 
+# --- cleanup: sweeps unprompted, asks only about the tracker ---
+cleanup="$SKILLS/cleanup/SKILL.md"
+assert_contains "$(cat "$cleanup")" "csw-sweep" "cleanup: runs the sweep"
+assert_contains "$(cat "$cleanup")" "ExitWorktree" "cleanup: prefers the native worktree exit"
+assert_contains "$(cat "$cleanup")" "git worktree remove" "cleanup: removes the worktree"
+assert_contains "$(cat "$cleanup")" "git worktree prune" "cleanup: prunes stale registrations"
+assert_contains "$(cat "$cleanup")" "Always ask before closing" "cleanup: never closes a ticket unasked"
+assert_contains "$(cat "$cleanup")" "sibling" "cleanup: checks for sibling PRs in other repos"
+assert_contains "$(cat "$cleanup")" "never require a separate instruction" "cleanup: branch cleanup is unconditional"
+
 report
