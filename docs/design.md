@@ -177,6 +177,14 @@ reviewable without polluting the environment used to review the PRs that finishe
 Progress is self-excluding, since the loop only pulls Todo — no risk of re-dispatching into
 the same wall the next night.
 
+**The draft rule generalizes beyond blocked-on-a-question.** Any ticket that does not reach
+a merge-ready state autonomously — failed validation it could not fix, a partial
+implementation, an approach that ran out of road — is left as a draft PR rather than a ready
+one. Draft is the state for "there is work here worth keeping, but it is not a merge
+candidate." That keeps every unfinished branch out of the preview merge automatically, so
+the morning review only ever sees PRs that are genuinely asking to be merged, and the
+partial work is still one click from reviewable.
+
 The answer then lands in the ticket as durable context, so a re-dispatch starts from a
 better brief than the original. The loop compounds rather than merely parallelizes.
 
