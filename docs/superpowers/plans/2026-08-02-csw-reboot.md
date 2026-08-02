@@ -1393,8 +1393,18 @@ branches and the worktrees still holding them, so cleanup can report them unprom
   whose upstream is gone, never including the base or the current branch.
   `csw-sweep worktrees` → `<path>\t<branch>` per line for worktrees holding such a branch.
   `csw-sweep` with no argument → a human-readable report, or `nothing to sweep`.
-- Exit `0` in all cases including "nothing found". A non-empty sweep is information, not an
-  error.
+- **Narrowed exit contract:** exit `0` applies to sweep *results* — finding nothing is
+  information, not an error, in every subcommand. It does **not** apply to environment
+  failures. A `csw-config` lookup failing (not a git repository, malformed config) surfaces
+  as `csw-sweep`'s own message naming which config lookup failed, propagating the
+  underlying exit code rather than leaking the other tool's wording. A bare repository
+  (no working tree) is its own case: `csw-config`'s generic "not in a git repository" is
+  actively misleading there — a bare repo *is* a repository — so `csw-sweep` detects it
+  directly and exits non-zero with a message saying it needs a working tree. A worktree
+  path that cannot be represented in the `<path><TAB><branch>` output contract (it
+  contains a literal TAB or newline) is also an environment failure, not a sweep result:
+  `csw-sweep worktrees` exits `2` naming the offending path rather than silently
+  mis-parsing or dropping it.
 - **Depends on `--merge` merges.** `git branch --merged` cannot see a squash-merged branch;
   the `--delete-branch` upstream-gone check is the backstop when it does not.
 
@@ -1545,6 +1555,87 @@ badfields=$(printf '%s\n' "$det_worktrees" | awk -F'\t' 'NF && NF != 2 { c++ } E
 assert_eq "$badfields" "0" \
   "worktrees output parses as exactly <path><TAB><branch> when main HEAD is detached"
 
+# A worktree path containing a literal TAB cannot be represented in the
+# <path><TAB><branch> output contract. csw-sweep must fail loudly (exit 2,
+# naming the offending path) instead of silently truncating or dropping it.
+tabrepo=$(make_repo)
+write_config "$tabrepo" <<'JSON'
+{ "baseBranch": "main", "worktreeDir": ".claude/worktrees" }
+JSON
+tab_worktree_ok=1
+(
+  cd "$tabrepo" || exit 1
+  git checkout -q -b feat/tabpath
+  printf 'x\n' >x.txt
+  git add -A && git commit -qm "tabpath work"
+  git checkout -q main
+  git merge -q --no-ff -m "merge feat/tabpath" feat/tabpath
+  mkdir -p "$tabrepo/.claude/worktrees"
+  git worktree add -q "$tabrepo/.claude/worktrees/has$(printf '\t')tab" feat/tabpath
+) || tab_worktree_ok=0
+if [ "$tab_worktree_ok" -eq 1 ]; then
+  tab_out=$(cd "$tabrepo" && "$BIN/csw-sweep" worktrees 2>&1)
+  tab_status=$?
+  assert_eq "$tab_status" "2" \
+    "a TAB in a worktree path exits 2 instead of silently mis-parsing it"
+  assert_contains "$tab_out" "TAB" "TAB error message names the problem as a TAB"
+  assert_contains "$tab_out" "worktrees/has" "TAB error message names the offending path"
+else
+  printf 'SKIP: this filesystem/git refused a worktree path containing a literal TAB; skipping the TAB-path test\n' >&2
+fi
+
+# A bare repo has no working tree. csw-sweep must fail with its own message
+# (not csw-config's "not in a git repository", which is misleading for a bare
+# repo -- it IS a repository, just one without a working tree) and a
+# non-zero exit, while a normal empty-but-not-bare repo still sweeps to
+# "nothing to sweep" and exits 0 (covered above).
+barerepo=$(mktemp -d)
+TMPDIRS+=("$barerepo")
+git init -q -b main --bare "$barerepo" >/dev/null
+bare_out=$(cd "$barerepo" && "$BIN/csw-sweep" branches 2>&1)
+bare_status=$?
+assert_eq "$bare_status" "1" "a bare repo makes csw-sweep exit non-zero, not 0"
+assert_contains "$bare_out" "working tree" "bare repo error names the missing working tree"
+case "$bare_out" in
+  *"not in a git repository"*)
+    assert_eq "leaked-csw-config-wording" "csw-sweep-message-only" \
+      "bare repo error must not leak csw-config's own wording" ;;
+  *) PASSES=$((PASSES + 1)) ;;
+esac
+
+# Discriminating regression for the `worktrees` path specifically: a worktree
+# on an UNMERGED branch named with a `.` must never be swept, even though an
+# unrelated MERGED branch's name happens to match it when misused as an
+# unescaped regex (feat/a.b as a BRE pattern also matches feat/aXb). This
+# exercises grep -Fqx inside stale_worktrees; the branches-side dot case is
+# covered separately above.
+wtdotrepo=$(make_repo)
+write_config "$wtdotrepo" <<'JSON'
+{ "baseBranch": "main", "worktreeDir": ".claude/worktrees" }
+JSON
+(
+  cd "$wtdotrepo" || exit 1
+  git checkout -q -b feat/aXb
+  printf 'x\n' >x.txt
+  git add -A && git commit -qm "aXb work"
+  git checkout -q main
+  git merge -q --no-ff -m "merge feat/aXb" feat/aXb
+
+  git checkout -q -b feat/a.b
+  printf 'y\n' >y.txt
+  git add -A && git commit -qm "a.b unmerged work"
+  git checkout -q main
+
+  git worktree add -q "$wtdotrepo/.claude/worktrees/dotwt" feat/a.b
+)
+wtdot_worktrees=$(cd "$wtdotrepo" && "$BIN/csw-sweep" worktrees)
+case "$wtdot_worktrees" in
+  *dotwt*)
+    assert_eq "unmerged-dotted-worktree-swept" "not-swept" \
+      "a worktree on an unmerged dotted branch must not be swept, even though its name regex-matches an unrelated merged branch" ;;
+  *) PASSES=$((PASSES + 1)) ;;
+esac
+
 report
 ```
 
@@ -1567,7 +1658,37 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 
-BASE=$("$HERE/csw-config" get baseBranch)
+die() {
+  printf 'csw-sweep: %s\n' "$1" >&2
+  exit "${2:-1}"
+}
+
+# A bare repository has no working tree. `git worktree list`, `git branch
+# --show-current`, and csw-config's toplevel lookup all behave in confusing
+# ways there, and csw-config's own error ("not in a git repository") is
+# actively misleading for this case -- a bare repo IS a git repository, just
+# one without a working tree. Catch it here with a specific message before
+# any of that runs.
+if [ "$(git rev-parse --is-bare-repository 2>/dev/null || printf 'false')" = "true" ]; then
+  die "needs a working tree; this is a bare repository" 1
+fi
+
+# Sweep results are never an error -- finding nothing is information, and
+# always exits 0. Environment failures (not a repo, malformed config) are a
+# different matter: surface them as csw-sweep's own message naming which
+# config lookup failed, propagating the underlying exit code, rather than
+# leaking csw-config's wording (or a raw command-not-found-style failure)
+# straight to the user.
+config_get() { # key
+  local value status=0
+  value=$("$HERE/csw-config" get "$1" 2>/dev/null) || status=$?
+  if [ "$status" -ne 0 ]; then
+    die "could not read config value '$1' (csw-config exited $status)" "$status"
+  fi
+  printf '%s' "$value"
+}
+
+BASE=$(config_get baseBranch)
 
 usage() {
   cat <<'EOF'
@@ -1601,13 +1722,38 @@ stale_worktrees() {
   local stale path ref short
   stale=$(stale_branches)
   if [ -z "$stale" ]; then return 0; fi
+  # Hand path/ref pairs from awk to the read loop NUL-delimited, not
+  # TAB-delimited: a worktree path is free to contain a literal TAB (rare,
+  # but git allows it), and splitting on TAB would silently mis-parse such a
+  # path -- truncating it and corrupting the next field -- dropping the
+  # worktree from the sweep with no error. NUL cannot appear in a path on any
+  # filesystem git supports, so it is a safe internal separator regardless of
+  # what the path itself contains.
   git worktree list --porcelain | awk '
     /^worktree /  { path = substr($0, 10); ref = "" }
     /^branch /    { ref = substr($0, 8) }
-    /^$/          { if (path != "") print path "\t" ref; path = "" }
-    END           { if (path != "") print path "\t" ref }
-  ' | while IFS="$(printf '\t')" read -r path ref; do
+    /^$/          { if (path != "") printf "%s%c%s%c", path, 0, ref, 0; path = "" }
+    END           { if (path != "") printf "%s%c%s%c", path, 0, ref, 0 }
+  ' | while IFS= read -r -d '' path && IFS= read -r -d '' ref; do
     if [ -z "$ref" ]; then continue; fi
+    # The *output* contract is <path><TAB><branch> (Task 9 parses it that
+    # way), so a path that itself contains a TAB -- or a newline, which
+    # would break line-oriented consumers -- cannot be represented in it.
+    # Fail loudly and specifically rather than silently truncating or
+    # mis-parsing: a missed stale worktree is exactly the failure this
+    # program exists to prevent. (A literal newline embedded in a path
+    # cannot actually survive `git worktree list --porcelain`'s line-based
+    # framing in the first place -- the newline would already have split it
+    # into a separate, unrecognized record upstream of this check -- but the
+    # check is kept as defense in depth in case that framing ever changes.)
+    case "$path" in
+      *"$(printf '\t')"*)
+        die "worktree path contains a TAB, which the <path><TAB><branch> output format cannot represent: $path" 2
+        ;;
+      *$'\n'*)
+        die "worktree path contains a newline, which the <path><TAB><branch> output format cannot represent: $path" 2
+        ;;
+    esac
     short=${ref#refs/heads/}
     if printf '%s\n' "$stale" | grep -Fqx "$short"; then
       printf '%s\t%s\n' "$path" "$short"
@@ -1655,7 +1801,9 @@ chmod +x bin/csw-sweep
 bash tests/test-csw-sweep.sh
 ```
 
-Expected: PASS — `18 passed, 0 failed`.
+Expected: PASS — `25 passed, 0 failed` (platform-dependent: the TAB-in-a-worktree-path
+test contributes 3 assertions when the local filesystem/git permit creating such a
+worktree, or is skipped with a note otherwise).
 
 - [ ] **Step 5: Commit**
 

@@ -4,7 +4,37 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 
-BASE=$("$HERE/csw-config" get baseBranch)
+die() {
+  printf 'csw-sweep: %s\n' "$1" >&2
+  exit "${2:-1}"
+}
+
+# A bare repository has no working tree. `git worktree list`, `git branch
+# --show-current`, and csw-config's toplevel lookup all behave in confusing
+# ways there, and csw-config's own error ("not in a git repository") is
+# actively misleading for this case -- a bare repo IS a git repository, just
+# one without a working tree. Catch it here with a specific message before
+# any of that runs.
+if [ "$(git rev-parse --is-bare-repository 2>/dev/null || printf 'false')" = "true" ]; then
+  die "needs a working tree; this is a bare repository" 1
+fi
+
+# Sweep results are never an error -- finding nothing is information, and
+# always exits 0. Environment failures (not a repo, malformed config) are a
+# different matter: surface them as csw-sweep's own message naming which
+# config lookup failed, propagating the underlying exit code, rather than
+# leaking csw-config's wording (or a raw command-not-found-style failure)
+# straight to the user.
+config_get() { # key
+  local value status=0
+  value=$("$HERE/csw-config" get "$1" 2>/dev/null) || status=$?
+  if [ "$status" -ne 0 ]; then
+    die "could not read config value '$1' (csw-config exited $status)" "$status"
+  fi
+  printf '%s' "$value"
+}
+
+BASE=$(config_get baseBranch)
 
 usage() {
   cat <<'EOF'
@@ -38,13 +68,38 @@ stale_worktrees() {
   local stale path ref short
   stale=$(stale_branches)
   if [ -z "$stale" ]; then return 0; fi
+  # Hand path/ref pairs from awk to the read loop NUL-delimited, not
+  # TAB-delimited: a worktree path is free to contain a literal TAB (rare,
+  # but git allows it), and splitting on TAB would silently mis-parse such a
+  # path -- truncating it and corrupting the next field -- dropping the
+  # worktree from the sweep with no error. NUL cannot appear in a path on any
+  # filesystem git supports, so it is a safe internal separator regardless of
+  # what the path itself contains.
   git worktree list --porcelain | awk '
     /^worktree /  { path = substr($0, 10); ref = "" }
     /^branch /    { ref = substr($0, 8) }
-    /^$/          { if (path != "") print path "\t" ref; path = "" }
-    END           { if (path != "") print path "\t" ref }
-  ' | while IFS="$(printf '\t')" read -r path ref; do
+    /^$/          { if (path != "") printf "%s%c%s%c", path, 0, ref, 0; path = "" }
+    END           { if (path != "") printf "%s%c%s%c", path, 0, ref, 0 }
+  ' | while IFS= read -r -d '' path && IFS= read -r -d '' ref; do
     if [ -z "$ref" ]; then continue; fi
+    # The *output* contract is <path><TAB><branch> (Task 9 parses it that
+    # way), so a path that itself contains a TAB -- or a newline, which
+    # would break line-oriented consumers -- cannot be represented in it.
+    # Fail loudly and specifically rather than silently truncating or
+    # mis-parsing: a missed stale worktree is exactly the failure this
+    # program exists to prevent. (A literal newline embedded in a path
+    # cannot actually survive `git worktree list --porcelain`'s line-based
+    # framing in the first place -- the newline would already have split it
+    # into a separate, unrecognized record upstream of this check -- but the
+    # check is kept as defense in depth in case that framing ever changes.)
+    case "$path" in
+      *"$(printf '\t')"*)
+        die "worktree path contains a TAB, which the <path><TAB><branch> output format cannot represent: $path" 2
+        ;;
+      *$'\n'*)
+        die "worktree path contains a newline, which the <path><TAB><branch> output format cannot represent: $path" 2
+        ;;
+    esac
     short=${ref#refs/heads/}
     if printf '%s\n' "$stale" | grep -Fqx "$short"; then
       printf '%s\t%s\n' "$path" "$short"
