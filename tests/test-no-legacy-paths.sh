@@ -3,7 +3,7 @@
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/test-helpers.sh"
 
-LEGACY="commands skills scripts presets templates spec csw TESTING.md issues-for-review.md .envrc"
+LEGACY="commands scripts presets templates spec csw TESTING.md issues-for-review.md .envrc"
 
 for path in $LEGACY; do
   if [ -e "$REPO_ROOT/$path" ]; then
