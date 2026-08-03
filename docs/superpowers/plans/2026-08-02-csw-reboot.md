@@ -2538,6 +2538,12 @@ shared relations is union-find, and union-find in jq is a bug farm.
 - Priority semantics: with `tracker: linear`, `1` is Urgent through `4` is Low and `0` means
   no priority, sorted last. Any other tracker sorts numerically descending.
 - Requires `python3` 3.9+. Phases 1–3 do not.
+- Exit codes: `0` ok. `2` bad input — malformed JSON, a non-array top-level value, a ticket
+  that isn't a JSON object, a ticket with a missing/empty/non-string `id`, a duplicate `id`,
+  `batch.maxTickets` not an integer `>= 0`, or `batch.singleWriterLabels` not a list of
+  strings — each with a single `csw-batch-filter: <message>` line on stderr naming what was
+  expected and what arrived, never a Python traceback. Any other exit code (e.g. `3` not a
+  git repo, `4` malformed config) is `csw-config`'s and is passed through unchanged.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2628,6 +2634,115 @@ assert_contains "$(reason_for "$t" G-4)" "batch cap" "cap reason is explicit"
 # Empty input is valid.
 assert_eq "$(selected '[]')" '[]' "empty input selects nothing"
 
+# --- Fix round 1: input and config validation instead of crashing on it ---
+
+status_of() { printf '%s' "$1" | "$BIN/csw-batch-filter" >/dev/null 2>/dev/null; printf '%d' "$?"; }
+stderr_of() { { printf '%s' "$1" | "$BIN/csw-batch-filter" >/dev/null; } 2>&1; }
+assert_no_traceback() { # stderr-text label
+  case "$1" in
+    *Traceback*)
+      FAILURES=$((FAILURES + 1))
+      printf 'FAIL %s\n  must not contain a Python traceback\n  actual: [%s]\n' "$2" "$1" >&2
+      ;;
+    *) PASSES=$((PASSES + 1)) ;;
+  esac
+}
+
+# Missing id: exit 2, names the offending index, no traceback.
+t='[{"priority":1,"state":"Todo"}]'
+assert_eq "$(status_of "$t")" "2" "missing id exits 2"
+err=$(stderr_of "$t")
+assert_contains "$err" "csw-batch-filter:" "missing id error uses the house prefix"
+assert_contains "$err" "index 0" "missing id error names the offending index"
+assert_no_traceback "$err" "missing id must not traceback"
+
+# Duplicate id: exit 2, names it.
+t='[{"id":"DUP","state":"Todo","priority":1},{"id":"DUP","state":"Todo","priority":2}]'
+assert_eq "$(status_of "$t")" "2" "duplicate id exits 2"
+assert_contains "$(stderr_of "$t")" "DUP" "duplicate id error names the id"
+
+# Top-level object instead of array: exit 2, names what arrived, no traceback.
+t='{"id":"X-1"}'
+assert_eq "$(status_of "$t")" "2" "top-level object exits 2"
+err=$(stderr_of "$t")
+assert_contains "$err" "object" "top-level object error names the type"
+assert_no_traceback "$err" "top-level object must not traceback"
+
+# Bare string: exit 2, no traceback.
+t='"hello"'
+assert_eq "$(status_of "$t")" "2" "bare string exits 2"
+err=$(stderr_of "$t")
+assert_contains "$err" "string" "bare string error names the type"
+assert_no_traceback "$err" "bare string must not traceback"
+
+# Malformed JSON: exit 2, no traceback.
+t='[{"id":'
+assert_eq "$(status_of "$t")" "2" "malformed JSON exits 2"
+err=$(stderr_of "$t")
+assert_contains "$err" "csw-batch-filter:" "malformed JSON error uses the house prefix"
+assert_no_traceback "$err" "malformed JSON must not traceback"
+
+# Empty stdin: exit 2, its own wording (distinct from generic malformed-JSON text),
+# no traceback.
+assert_eq "$(printf '' | "$BIN/csw-batch-filter" >/dev/null 2>/dev/null; printf '%d' "$?")" "2" \
+  "empty stdin exits 2"
+err=$( { printf '' | "$BIN/csw-batch-filter" >/dev/null; } 2>&1)
+assert_contains "$err" "no input" "empty stdin gets its own wording"
+assert_no_traceback "$err" "empty stdin must not traceback"
+
+# Negative maxTickets: rejected outright rather than silently slicing "all but the
+# last N" — a typo must not produce a plausible-looking wrong batch.
+write_config "$repo" <<'JSON'
+{ "tracker": "linear", "batch": { "maxTickets": -1, "singleWriterLabels": ["migration"] } }
+JSON
+t='[{"id":"NEG-1","state":"Todo","priority":1}]'
+assert_eq "$(status_of "$t")" "2" "negative maxTickets exits 2"
+assert_contains "$(stderr_of "$t")" "maxTickets" "negative maxTickets error names the key"
+
+# maxTickets: 0 is valid and meaningful — it selects nothing, and every candidate is
+# skipped with the batch-cap reason.
+write_config "$repo" <<'JSON'
+{ "tracker": "linear", "batch": { "maxTickets": 0, "singleWriterLabels": ["migration"] } }
+JSON
+t='[{"id":"Z-1","state":"Todo","priority":1},{"id":"Z-2","state":"Todo","priority":2}]'
+assert_eq "$(selected "$t")" '[]' "maxTickets 0 selects nothing"
+assert_contains "$(reason_for "$t" Z-1)" "batch cap" "maxTickets 0 skips the first with the cap reason"
+assert_contains "$(reason_for "$t" Z-2)" "batch cap" "maxTickets 0 skips the second with the cap reason"
+
+# Non-list singleWriterLabels: exit 2, names the key.
+write_config "$repo" <<'JSON'
+{ "tracker": "linear", "batch": { "maxTickets": 3, "singleWriterLabels": "migration" } }
+JSON
+t='[{"id":"SW-1","state":"Todo","priority":1}]'
+assert_eq "$(status_of "$t")" "2" "non-list singleWriterLabels exits 2"
+assert_contains "$(stderr_of "$t")" "singleWriterLabels" "non-list singleWriterLabels error names the key"
+
+# Restore the standard config for the accounting-invariant check below.
+write_config "$repo" <<'JSON'
+{
+  "tracker": "linear",
+  "batch": { "maxTickets": 3, "singleWriterLabels": ["migration"] }
+}
+JSON
+
+# The invariant every filter above depends on: every input ticket appears exactly
+# once across selected plus skipped. This is a permanent guard, not just a probe.
+t='[
+  {"id":"INV-1","state":"Todo","priority":1,"labels":["migration"]},
+  {"id":"INV-2","state":"Todo","priority":2,"labels":["migration"]},
+  {"id":"INV-3","state":"Todo","priority":1,"relatedTo":["INV-9"]},
+  {"id":"INV-4","state":"Todo","priority":2,"relatedTo":["INV-9"]},
+  {"id":"INV-5","state":"Todo","priority":3,"blockedBy":["INV-8"]},
+  {"id":"INV-6","state":"In Progress","priority":1},
+  {"id":"INV-7","state":"Todo","priority":4}
+]'
+out=$(run "$t")
+in_ids=$(printf '%s' "$t" | jq -c '[.[].id] | sort')
+out_ids=$(printf '%s' "$out" | jq -c '(.selected + [.skipped[].id]) | sort')
+assert_eq "$out_ids" "$in_ids" "every ticket appears across selected+skipped, same set as the input"
+dupe_count=$(printf '%s' "$out" | jq '(.selected + [.skipped[].id]) | (length - (unique | length))')
+assert_eq "$dupe_count" "0" "no ticket appears in both selected and skipped"
+
 report
 ```
 
@@ -2657,12 +2772,38 @@ on stdout. Three filters, in this order, because each one depends on the last:
   3. Single-writer labels (migrations, by default) admit one ticket per batch.
      Two agents each writing "the next migration number" both validate against
      main and one still has to be redone rather than rebased.
+
+All input — stdin and config alike — is untrusted. Bad input is a clean, single-line
+"csw-batch-filter: <message>" on stderr and exit 2, matching the four shell tools in
+this directory. A Python traceback is never an acceptable user-facing error.
 """
 
 import json
 import os
 import subprocess
 import sys
+
+
+def die(message):
+    sys.stderr.write("csw-batch-filter: %s\n" % message)
+    sys.exit(2)
+
+
+def describe_type(value):
+    """A JSON-flavored type name for error messages, not a Python one."""
+    if isinstance(value, bool):
+        return "boolean"
+    if value is None:
+        return "null"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, (int, float)):
+        return "number"
+    return type(value).__name__
 
 
 def load_config():
@@ -2676,6 +2817,33 @@ def load_config():
         sys.stderr.write("csw-batch-filter: %s" % proc.stderr)
         sys.exit(proc.returncode)
     return json.loads(proc.stdout)
+
+
+def load_tickets():
+    """Read, parse, and validate the ticket array from stdin. Never raises past here —
+    every malformed shape exits 2 with a message naming what was expected and what
+    arrived, rather than an uncaught exception."""
+    raw = sys.stdin.read()
+    if not raw.strip():
+        die("no input on stdin (expected a JSON array of tickets, got nothing)")
+    try:
+        tickets = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        die("malformed JSON on stdin: %s" % exc)
+    if not isinstance(tickets, list):
+        die("expected a JSON array of tickets on stdin, got a top-level %s"
+            % describe_type(tickets))
+    seen_ids = set()
+    for i, t in enumerate(tickets):
+        if not isinstance(t, dict):
+            die("ticket at index %d must be a JSON object, got %s" % (i, describe_type(t)))
+        tid = t.get("id")
+        if not isinstance(tid, str) or tid == "":
+            die("ticket at index %d has no valid \"id\" (must be a non-empty string)" % i)
+        if tid in seen_ids:
+            die("duplicate ticket id: %s" % tid)
+        seen_ids.add(tid)
+    return tickets
 
 
 def rank(ticket, tracker):
@@ -2695,7 +2863,13 @@ def main():
     max_tickets = batch.get("maxTickets", 3)
     single_writer = batch.get("singleWriterLabels") or []
 
-    tickets = json.load(sys.stdin)
+    if not isinstance(max_tickets, int) or isinstance(max_tickets, bool) or max_tickets < 0:
+        die("batch.maxTickets must be an integer >= 0, got %s" % json.dumps(max_tickets))
+    if not isinstance(single_writer, list) or not all(isinstance(l, str) for l in single_writer):
+        die("batch.singleWriterLabels must be a list of strings, got %s"
+            % json.dumps(single_writer))
+
+    tickets = load_tickets()
     skipped = []
     candidates = []
 
@@ -2783,7 +2957,7 @@ chmod +x bin/csw-batch-filter
 bash tests/test-csw-batch-filter.sh
 ```
 
-Expected: PASS — `14 passed, 0 failed`.
+Expected: PASS — `40 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 
