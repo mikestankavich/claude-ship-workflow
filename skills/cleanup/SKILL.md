@@ -55,11 +55,21 @@ created. Otherwise move to the main worktree root by hand:
 
 ```bash
 cd "$(git -C "$(git rev-parse --git-common-dir)/.." rev-parse --show-toplevel)"
+```
+
+Worktree removal must run from outside the worktree being removed.
+
+Then, **on either path**, land on the base branch and take the remote's latest:
+
+```bash
 git checkout "<baseBranch>"
 git pull
 ```
 
-Worktree removal must run from outside the worktree being removed.
+`git pull` is not optional and is not only for the manual path. The merge you just landed
+is on the remote, not in this checkout — skip the pull and the local base branch sits one
+commit behind from the moment cleanup finishes, which then silently backdates the next
+worktree branched from it. If the pull fails, say so and stop before removing anything.
 
 ## Step 3: Remove this worktree and branch
 

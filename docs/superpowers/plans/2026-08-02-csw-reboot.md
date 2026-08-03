@@ -396,7 +396,7 @@ Expected: FAIL — `missing manifest: .../.claude-plugin/plugin.json`.
   "description": "Ship a tracker ticket: dispatch it into a worktree, drive it to a pull request, merge it after review, and clean up after itself.",
   "author": {
     "name": "Mike Stankavich",
-    "email": "miks2u@gmail.com"
+    "email": "mike@stankavich.com"
   },
   "homepage": "https://github.com/mikestankavich/claude-ship-workflow",
   "repository": "https://github.com/mikestankavich/claude-ship-workflow",
@@ -420,7 +420,7 @@ Expected: FAIL — `missing manifest: .../.claude-plugin/plugin.json`.
   "description": "Claude Ship Workflow — one person's ticket-to-merged-PR workflow, packaged.",
   "owner": {
     "name": "Mike Stankavich",
-    "email": "miks2u@gmail.com"
+    "email": "mike@stankavich.com"
   },
   "plugins": [
     {
@@ -430,7 +430,7 @@ Expected: FAIL — `missing manifest: .../.claude-plugin/plugin.json`.
       "source": "./",
       "author": {
         "name": "Mike Stankavich",
-        "email": "miks2u@gmail.com"
+        "email": "mike@stankavich.com"
       }
     }
   ]
@@ -2500,11 +2500,18 @@ created. Otherwise move to the main worktree root by hand:
 
 ```bash
 cd "$(git -C "$(git rev-parse --git-common-dir)/.." rev-parse --show-toplevel)"
+```
+
+Worktree removal must run from outside the worktree being removed.
+
+Then, **on either path**, land on the base branch and take the remote's latest:
+
+```bash
 git checkout "<baseBranch>"
 git pull
 ```
 
-Worktree removal must run from outside the worktree being removed.
+`git pull` is not optional and is not only for the manual path.
 
 ## Step 3: Remove this worktree and branch
 

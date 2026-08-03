@@ -125,6 +125,10 @@ assert_contains "$(cat "$cleanup")" "csw-sweep" "cleanup: runs the sweep"
 assert_contains "$(cat "$cleanup")" "ExitWorktree" "cleanup: prefers the native worktree exit"
 assert_contains "$(cat "$cleanup")" "git worktree remove" "cleanup: removes the worktree"
 assert_contains "$(cat "$cleanup")" "git worktree prune" "cleanup: prunes stale registrations"
+# The pull must bind both paths, not just the manual fallback — an ExitWorktree cleanup
+# that skips it leaves the local base branch behind the merge it just landed.
+assert_contains "$(cat "$cleanup")" "on either path" "cleanup: pulls the base branch on both paths"
+assert_contains "$(cat "$cleanup")" "not only for the manual path" "cleanup: says the pull is not optional"
 assert_contains "$(cat "$cleanup")" "Always ask before closing" "cleanup: never closes a ticket unasked"
 assert_contains "$(cat "$cleanup")" "sibling" "cleanup: checks for sibling PRs in other repos"
 assert_contains "$(cat "$cleanup")" "never require a separate instruction" "cleanup: branch cleanup is unconditional"

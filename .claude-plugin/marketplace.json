@@ -3,7 +3,7 @@
   "description": "Claude Ship Workflow — one person's ticket-to-merged-PR workflow, packaged.",
   "owner": {
     "name": "Mike Stankavich",
-    "email": "miks2u@gmail.com"
+    "email": "mike@stankavich.com"
   },
   "plugins": [
     {
@@ -13,7 +13,7 @@
       "source": "./",
       "author": {
         "name": "Mike Stankavich",
-        "email": "miks2u@gmail.com"
+        "email": "mike@stankavich.com"
       }
     }
   ]
