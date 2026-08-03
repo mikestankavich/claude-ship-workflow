@@ -45,14 +45,37 @@ Usage:
 EOF
 }
 
+# The base branch's upstream, e.g. `origin/main`, or empty when the base has no
+# upstream configured (or does not resolve at all). Reads only what the
+# remote-tracking ref already knows: csw-sweep is a reporting tool and must
+# never fetch, so it neither mutates refs nor touches the network.
+base_upstream() {
+  git rev-parse --abbrev-ref "$BASE@{upstream}" 2>/dev/null || true
+}
+
+# Local branches fully merged into <commit-ish>.
+# Plumbing, not `git branch --merged`: the porcelain command emits a synthetic
+# "(HEAD detached at ...)" pseudo-entry when HEAD is detached, which is not a
+# branch name and must never reach the output. for-each-ref only walks real refs.
+merged_into() { # commit-ish
+  git for-each-ref --format='%(refname:short)' --merged "$1" refs/heads 2>/dev/null || true
+}
+
 stale_branches() {
-  local current merged gone
+  local current merged gone upstream
   current=$(git branch --show-current 2>/dev/null || true)
   # Merged into the base. Requires --merge merges; squash-merges are invisible here.
-  # Plumbing, not `git branch --merged`: the porcelain command emits a synthetic
-  # "(HEAD detached at ...)" pseudo-entry when HEAD is detached, which is not a
-  # branch name and must never reach the output. for-each-ref only walks real refs.
-  merged=$(git for-each-ref --format='%(refname:short)' --merged "$BASE" refs/heads 2>/dev/null || true)
+  merged=$(merged_into "$BASE")
+  # ...and merged into the base's upstream. On a machine where PRs are merged on
+  # the forge rather than locally — this workflow's whole premise — the local
+  # base is routinely behind, and a branch that genuinely shipped is not merged
+  # into it. Checking only the local base makes exactly the branches this tool
+  # exists to find invisible. Union rather than replace: the local base can
+  # legitimately carry merges the upstream has not seen yet.
+  upstream=$(base_upstream)
+  if [ -n "$upstream" ]; then
+    merged=$(printf '%s\n%s\n' "$merged" "$(merged_into "$upstream")")
+  fi
   # Upstream deleted — what `gh pr merge --delete-branch` leaves behind.
   gone=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null \
     | awk '$2 == "[gone]" { print $1 }')
@@ -62,6 +85,21 @@ stale_branches() {
     | grep -Fvx "$BASE" \
     | grep -Fvx "${current:-@@no-current-branch@@}" \
     || true
+}
+
+# A silent sweep and a stale one look identical from the outside, and the report
+# is the only place a human is reading prose. Say when the local base is behind
+# its upstream, so "nothing to sweep" can be read as an answer rather than as a
+# possibly-stale one. Prints nothing when the base has no upstream, when the
+# comparison cannot be made, or when the base is level with or ahead of it.
+base_behind_note() {
+  local upstream count
+  upstream=$(base_upstream)
+  [ -n "$upstream" ] || return 0
+  count=$(git rev-list --count "$BASE..$upstream" 2>/dev/null || true)
+  [ -n "$count" ] && [ "$count" != "0" ] || return 0
+  printf 'note: local %s is %s commit(s) behind %s (not fetched); swept against both\n' \
+    "$BASE" "$count" "$upstream"
 }
 
 stale_worktrees() {
@@ -118,6 +156,9 @@ case "${1:-}" in
   ''|report)
     b=$(stale_branches)
     w=$(stale_worktrees)
+    # Before the findings, and before "nothing to sweep" — the caveat has to
+    # reach the reader whether or not anything was found.
+    base_behind_note
     if [ -z "$b" ] && [ -z "$w" ]; then
       printf 'nothing to sweep\n'
       exit 0
