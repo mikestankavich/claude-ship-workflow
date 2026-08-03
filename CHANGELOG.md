@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-08-03
+
+### Fixed
+- `/csw:cleanup` now **verifies** `ExitWorktree`'s "will discard N commits" warning instead of
+  trusting it. Before passing `discard_changes: true` it captures the branch head and runs
+  `git merge-base --is-ancestor "$head_sha" origin/<base>`: exit 0 proves the commits are already
+  on the remote and nothing is lost, non-zero means the warning is real — stop and report, do not
+  discard. The skill previously said nothing about this warning, leaving an agent to either stall
+  on something it could not evaluate or wave it through reflexively, and the second habit
+  eventually deletes work that really was unmerged.
+
+### Changed
+- **The discard warning is documented as unavoidable.** `ExitWorktree` compares the branch against
+  the worktree's *creation point*, so the warning fires on every cleanup and **cannot be suppressed
+  by anything cleanup does**. This was measured, not assumed: the local base branch was moved
+  *ahead* of the branch head before exiting and the warning fired anyway. Because it always fires
+  it carries no information on its own, which is precisely why the `merge-base` check is the only
+  defence. The skill records the null result so the experiment is not run a third time.
+- The branch name shown in the warning is the pre-rename `worktree-<slug>`, which makes
+  `/csw:work` Step 4's rename look causal. It is not — the commit *count* is correct, and the
+  stale name is display only. `/csw:cleanup` now says so, and says not to "fix" this by
+  abandoning the rename that ties a branch to its ticket.
+
 ## [1.0.1] - 2026-08-03
 
 ### Fixed
