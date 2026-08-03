@@ -1,15 +1,15 @@
 ---
 name: work
-description: Dispatch a tracker ticket into an isolated worktree and drive it autonomously to an open pull request, then stop for review. Use when asked to work a ticket end-to-end without supervision.
-when_to_use: "/csw:work 1088", "work ENG-1088", "work 1088 autonomous to PR then hold for review", "take ENG-1088 to a PR"
-argument-hint: "[ticket-ref]"
+description: Dispatch a tracker ticket into an isolated worktree and drive it autonomously to an open pull request, then stop for review. Pass `interactive` to brainstorm the ticket with a human before planning it. Use when asked to work a ticket end-to-end.
+when_to_use: "/csw:work 1088", "work ENG-1088", "work 1088 autonomous to PR then hold for review", "take ENG-1088 to a PR", "/csw:work 1088 interactive"
+argument-hint: "[ticket-ref] [interactive]"
 ---
 
 # Work a ticket to a pull request
 
 **Announce at start:** "Using csw:work to take <ticket> to a pull request."
 
-Ticket reference: $ARGUMENTS
+Invocation: $ARGUMENTS
 
 ## Step 0: Read the config
 
@@ -22,16 +22,36 @@ If `csw-config path` prints nothing, this repo has no `.claude/csw.json`. Say so
 defaults you are about to use, and ask whether to continue or write a config first. Do not
 silently guess a validate command.
 
-## Step 1: Resolve the ticket
+## Step 1: Resolve the ticket, and the modifier
+
+The invocation is a ticket reference, optionally followed by one modifier word. Split it on
+whitespace: the first token is the reference, whatever follows it is the modifier.
 
 ```bash
-csw-ticket normalize "<the reference from the invocation>"
+csw-ticket normalize "<the first token of the invocation>"
 ```
 
 If the invocation carried no reference, ask which ticket. Do not pick one.
 
 If normalisation exits non-zero, report its message and stop — a mistyped reference is
 exactly the failure this command exists to prevent.
+
+Then read the modifier:
+
+- **`interactive`** — run **superpowers:brainstorming** against the ticket before the Step 5
+  chain. Surface the questions and wait for the answers. Do not run unattended. This is the
+  flavour someone reaches for when the ticket is vague, or when the approach has more than one
+  defensible shape; answering your own questions is exactly the thing it exists to prevent.
+- **No modifier** — autonomous, exactly as the rest of this skill describes. Brainstorming is
+  skipped because the ticket is the agreed brief.
+- **An unrecognised modifier is not ignored.** Say what was passed, say it is not recognised,
+  and ask whether to proceed autonomously — then wait. Silently discarding a word someone
+  deliberately typed is how a dispatch does something other than what was asked, and the word
+  they were reaching for may well have been `interactive`.
+
+`interactive` changes only how the work is planned. Steps 6 through 9 are untouched: the same
+validation, the same gates, the same pull request, the same hard stop. An interactive run
+still ends at an open pull request and still never merges.
 
 ## Step 2: Read the ticket and claim it
 
@@ -77,8 +97,10 @@ after confirming that directory is gitignored.
 
 Run the superpowers chain in autonomous mode:
 
-1. **superpowers:writing-plans** — the ticket is the spec. Skip brainstorming: an unattended
-   dispatch has nobody to brainstorm with, and the ticket is the agreed brief.
+1. **superpowers:writing-plans** — the ticket is the spec, and brainstorming is skipped
+   unless this run is interactive: an unattended dispatch has nobody to brainstorm with, and
+   the ticket is the agreed brief. On an interactive run Step 1 already brainstormed, and the
+   answers it surfaced are part of the spec alongside the ticket.
 2. **superpowers:executing-plans** — execute it.
 3. **superpowers:test-driven-development** — inside every task. Test first, always.
 
@@ -87,6 +109,10 @@ are a strong recommendation, not a hard dependency.
 
 Autonomous means: make the ordinary judgment calls yourself, do not stop to confirm each
 step. It does not mean skipping the stop in Step 8.
+
+An interactive run is autonomous from here too. The questions were asked in Step 1; once they
+are answered, plan, execute, and validate the same way — do not turn the rest of the run into
+a series of confirmations.
 
 ## Step 6: Validate
 
@@ -182,3 +208,6 @@ are actually asking to be merged.
 | "I'll create the worktree with git, it's faster" | Use EnterWorktree. Bypassing it strands state the harness cannot clean up. |
 | "The title tells me enough about the ticket" | Read the description. The ordering constraints are in the prose. |
 | "No config file, I'll infer the validate command" | Ask. A wrong validate command means a green run that proves nothing. |
+| "They typed a word I don't recognise, I'll get on with the ticket" | An unrecognised modifier is a question, not noise. Name it back and ask. |
+| "It's interactive, so someone is watching — I can merge it" | `interactive` changes planning only. Step 8 is the same hard stop. |
+| "It's interactive, I'll confirm each step as I go" | The questions belong in Step 1. After that it runs like any other dispatch. |
