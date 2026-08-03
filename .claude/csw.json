@@ -1,0 +1,14 @@
+{
+  "tracker": "github",
+  "baseBranch": "main",
+  "defaultType": "feat",
+  "validate": "bash tests/run-tests.sh",
+  "worktreeDir": ".claude/worktrees",
+  "branchPattern": "<type>/<ticket>-<slug>",
+  "gates": [
+    {
+      "when": "bin/**",
+      "run": "shellcheck --severity=warning bin/csw-config bin/csw-ticket bin/csw-gates bin/csw-sweep"
+    }
+  ]
+}

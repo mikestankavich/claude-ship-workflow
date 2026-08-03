@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-08-02
+
+CSW is now Claude **Ship** Workflow. Complete rewrite: superpowers owns how the work gets
+done, CSW owns how it gets shipped and closed out.
+
+### Added
+- `/csw:work <ticket>` — dispatch a ticket into a worktree, drive it autonomously to an open
+  pull request, then hard-stop for review.
+- `/csw:merge` — CI-gated merge on natural-language approval, chaining into cleanup.
+- `/csw:cleanup` — worktree and branch removal plus an unprompted sweep for other stale
+  branches and worktrees. Always asks before closing a ticket.
+- `/csw:batch` — nightly loop with blocked, same-surface-cluster, and single-writer filters
+  and a morning summary.
+- `.claude/csw.json` config layer, so a different project is a config file rather than a fork.
+- `bin/csw-config`, `bin/csw-ticket`, `bin/csw-gates`, `bin/csw-sweep`, `bin/csw-batch-filter`.
+- Bash test suite and CI.
+
+### Removed
+- **BREAKING:** `/csw:spec`, `/csw:plan`, `/csw:build`, `/csw:check`, `/csw:ship`, the `csw`
+  binary, `spec/` trees, presets, and templates. Old and new must not coexist. Use
+  [superpowers](https://github.com/obra/superpowers) for that half of the workflow.
+
+### Changed
+- Ships as a Claude Code plugin marketplace instead of a shell installer.
+- Repository renamed to `claude-ship-workflow`.
+
 ## [Unreleased]
 
 ### Added

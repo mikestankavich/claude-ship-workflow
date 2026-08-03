@@ -1,0 +1,23 @@
+{
+  "ticketPrefix": "TRA",
+  "tracker": "linear",
+  "baseBranch": "main",
+  "defaultType": "feat",
+  "validate": "just validate",
+  "worktreeDir": ".claude/worktrees",
+  "branchPattern": "<type>/<ticket>-<slug>",
+  "gates": [
+    {
+      "when": "**/migrations/**",
+      "run": "just backend migrate-checksums"
+    },
+    {
+      "when": "web/**/*.tsx",
+      "run": "just playwright-preview"
+    }
+  ],
+  "batch": {
+    "maxTickets": 3,
+    "singleWriterLabels": ["migration"]
+  }
+}

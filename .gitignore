@@ -1,20 +1,28 @@
 # IDE
 .idea/
 .vscode/
-.claude/
 *.swp
 *.swo
 *~
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Testing
-.spec/
+# Claude Code — commit csw.json, ignore local state
+#
+# No trailing slash on worktrees: `git check-ignore` cannot confirm a
+# directory-only ("foo/") pattern against a path that does not yet exist on
+# disk, and a freshly cloned checkout has no .claude/worktrees/ until a
+# worktree is actually created there. Dropping the trailing slash matches
+# the path regardless, at the cost of also matching a plain file named
+# exactly "worktrees" in that spot — a name nothing in this repo ever uses.
+.claude/worktrees
+.claude/settings.local.json
+.claude/data/
 
 # Subagent-driven development scratch
 .superpowers/
+
+# OS
+.DS_Store
+Thumbs.db
 
 # Local environment (secrets/local config)
 .env.local
