@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-08-03
+
+### Fixed
+- **`csw-sweep`'s upstream-gone detection had never fired.** It finds branches deleted on the
+  forge through `%(upstream:track)` reporting `[gone]`, which only happens once
+  `refs/remotes/origin/<name>` is missing *locally*. `gh pr merge --delete-branch` deletes the
+  branch on the forge; only a prune removes the local mirror, and nothing in the workflow pruned
+  — `/csw:cleanup`'s `git pull` does not, absent `fetch.prune`. Every leftover the sweep ever
+  found came from the merged-into-base arm instead, which is exactly the arm that cannot see a
+  branch that shipped without becoming an ancestor of the base. `/csw:cleanup` Step 2 now runs
+  `git pull --prune` before the sweep, with the reason recorded so the flag is not tidied away
+  later. The sweep cannot fix this itself: never fetching is a deliberate invariant, and pruning
+  mutates refs.
+- `/csw:cleanup`'s sibling-PR search ran unscoped across all of GitHub. With `tracker: github`
+  the ticket is a bare number, so searching for `81` returned thirty strangers' PRs and not one
+  sibling — thirty false positives being precisely the output an agent skims past. The query is
+  now scoped with `--owner`, with a title search and a `--match title,body` form for numeric
+  tickets, and the skill says plainly that a long result list means the query was too broad
+  rather than that there are many siblings.
+
+### Changed
+- `csw-sweep`'s report carries a second `note:` line when upstream-gone detection may be stale,
+  for standalone invocations that have no skill wrapped around them to prune first. It fires
+  only when it could change the answer — when some branch that is not the base and is not
+  already reported still resolves an upstream, which is precisely the set a prune could add to
+  the report. Unconditional would be noise that teaches the reader to skip `note:` lines,
+  costing the base-behind note its audience too.
+
 ## [1.0.2] - 2026-08-03
 
 ### Fixed
