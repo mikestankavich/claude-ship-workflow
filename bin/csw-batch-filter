@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""csw-batch-filter — choose tonight's batch from a list of candidate tickets.
+
+Reads a JSON array of tickets on stdin, writes {"selected": [...], "skipped": [...]}
+on stdout. Three filters, in this order, because each one depends on the last:
+
+  1. Blocked or not-Todo tickets are dropped outright.
+  2. Same-surface clusters keep only their highest-priority member. Two tickets on
+     one surface do not conflict textually, but an agent doing the second one
+     properly lands in the first one's copy.
+  3. Single-writer labels (migrations, by default) admit one ticket per batch.
+     Two agents each writing "the next migration number" both validate against
+     main and one still has to be redone rather than rebased.
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+
+def load_config():
+    here = os.path.dirname(os.path.abspath(__file__))
+    proc = subprocess.run(
+        [os.path.join(here, "csw-config"), "json"],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write("csw-batch-filter: %s" % proc.stderr)
+        sys.exit(proc.returncode)
+    return json.loads(proc.stdout)
+
+
+def rank(ticket, tracker):
+    """Lower sorts first. Linear uses 1=Urgent..4=Low with 0 meaning no priority."""
+    priority = ticket.get("priority")
+    if priority is None:
+        priority = 0
+    if tracker == "linear":
+        return 999 if priority == 0 else priority
+    return -priority
+
+
+def main():
+    cfg = load_config()
+    tracker = cfg.get("tracker", "none")
+    batch = cfg.get("batch") or {}
+    max_tickets = batch.get("maxTickets", 3)
+    single_writer = batch.get("singleWriterLabels") or []
+
+    tickets = json.load(sys.stdin)
+    skipped = []
+    candidates = []
+
+    for t in tickets:
+        if t.get("state") != "Todo":
+            skipped.append({"id": t["id"],
+                            "reason": "not in Todo (state: %s)" % t.get("state")})
+        elif t.get("blockedBy"):
+            skipped.append({"id": t["id"],
+                            "reason": "blocked by %s" % ", ".join(t["blockedBy"])})
+        else:
+            candidates.append(t)
+
+    # Rank order decides every tie below: cluster winner, label holder, and cap.
+    candidates.sort(key=lambda t: (rank(t, tracker), t["id"]))
+
+    parent = {t["id"]: t["id"] for t in candidates}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    by_target = {}
+    candidate_ids = set(parent)
+    for t in candidates:
+        for related in t.get("relatedTo") or []:
+            by_target.setdefault(related, []).append(t["id"])
+            if related in candidate_ids:
+                union(t["id"], related)
+    for members in by_target.values():
+        for other in members[1:]:
+            union(members[0], other)
+
+    cluster_head = {}
+    clustered = []
+    for t in candidates:
+        root = find(t["id"])
+        if root in cluster_head:
+            skipped.append({"id": t["id"],
+                            "reason": "same-surface cluster with %s" % cluster_head[root]})
+            continue
+        cluster_head[root] = t["id"]
+        clustered.append(t)
+
+    claimed = {}
+    admitted = []
+    for t in clustered:
+        labels = t.get("labels") or []
+        conflict = next((l for l in single_writer if l in labels and l in claimed), None)
+        if conflict:
+            skipped.append({
+                "id": t["id"],
+                "reason": "single-writer conflict on '%s' with %s" % (conflict, claimed[conflict]),
+            })
+            continue
+        for label in single_writer:
+            if label in labels:
+                claimed[label] = t["id"]
+        admitted.append(t)
+
+    selected = admitted[:max_tickets]
+    for t in admitted[max_tickets:]:
+        skipped.append({"id": t["id"], "reason": "batch cap (%d)" % max_tickets})
+
+    json.dump({"selected": [t["id"] for t in selected], "skipped": skipped},
+              sys.stdout, indent=2)
+    sys.stdout.write("\n")
+
+
+if __name__ == "__main__":
+    main()
