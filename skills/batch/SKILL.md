@@ -147,25 +147,74 @@ last human checkpoint before an unattended night — once given, Steps 5 through
 through with no further prompting and no further confirmation, until the morning summary
 reports what happened.
 
-## Step 5: Dispatch each, in order
+## Step 5: Dispatch each to a fresh subagent, in order
 
-For each selected ticket, run **csw:work** with the ticket reference and nothing else. Let it
-run to its hard stop at an open PR, then move to the next one. One worktree and one PR per
-ticket.
+Every selected ticket goes to a **fresh subagent** of its own, dispatched in order, each
+running `csw:work` to its hard stop at an open PR. One subagent, one worktree, one PR per
+ticket. **Never run `csw:work` in this session.**
 
-Nothing else, because `csw:work` takes an `interactive` modifier that brainstorms the ticket
-and waits for a human to answer. At 3am there is nobody to answer, and a ticket parked on an
-unanswered question is a night that stops on the first one rather than working the rest. A
-ticket that genuinely needs the conversation is a ticket for tomorrow, dispatched by hand.
+This session holds the loop and nothing else: the three groups from Step 2, the row each
+dispatch returns, and the morning summary. It must never hold a ticket's plan, its diff, or the
+approaches it tried and abandoned — because whatever it holds, the next ticket inherits.
+Isolated worktrees driven from one shared context are not isolated dispatches: ticket two is
+biased by an approach chosen for ticket one, and a dead end explored at 11pm is still sitting
+in context at 2am when nobody is watching. The subagent is the programmatic equivalent of
+clearing context before each dispatch, which is the discipline this whole workflow rests on.
 
-## Step 6: When a ticket blocks
+### The dispatch
 
-An unattended batch has nobody to ask. So instead of stopping and waiting:
+- **A fresh subagent per ticket.** Not a fork: a fork inherits the parent conversation
+  wholesale, which is the exact contamination being removed here. It would look like isolation
+  and provide none.
+- **The brief is the ticket reference and nothing else.** `csw:work` Step 2 reads the ticket
+  from the tracker itself, so a reference is a complete brief. Anything else you add is context
+  from a different ticket.
+- **Synchronously, one at a time, in dispatch order.** The controller needs each result before
+  it moves on; a night whose dispatches all land at once is a morning that cannot attribute
+  anything.
+- **With no worktree isolation on the subagent.** `csw:work` Step 4 creates the worktree itself,
+  on the branch `csw-ticket branch` derives from the ticket. A subagent handed an isolated
+  worktree at launch is already inside one and cannot create that branch — it would work in an
+  auto-named temporary worktree instead, on a branch name that nothing downstream (the PR title,
+  `csw:merge`, `csw:cleanup`) knows how to find.
 
-1. Write the question as a comment on the ticket.
-2. Push a **draft** PR carrying the work so far (`gh pr create --draft`), referencing it.
-3. Leave the ticket In Progress.
-4. Continue to the next ticket.
+`csw:work` is reachable from inside a subagent because it sets no `disable-model-invocation`:
+the subagent invokes it through the Skill tool by name, and it can equally be preloaded into a
+subagent definition's `skills` field. Nothing extra has to be installed for this to work.
+
+The reference goes over on its own for a second reason too. `csw:work` takes an `interactive`
+modifier that brainstorms the ticket and waits for a human to answer, and at 3am there is
+nobody to answer — a ticket parked on an unanswered question is a night that stops on the first
+one rather than working the rest. A ticket that genuinely needs the conversation is a ticket for
+tomorrow, dispatched by hand. A subagent cannot ask the user anything even if it wanted to, but
+do not lean on that: pass the reference alone and the question never arises.
+
+### The report contract
+
+Each subagent returns one structured result and nothing else — no transcript, no plan, no diff:
+
+| Field | Contents |
+|---|---|
+| `ticket` | The reference that was dispatched |
+| `outcome` | `pr`, `draft`, or `failed` |
+| `pr` | The pull request URL, or none if it never got that far |
+| `summary` | One line on what changed |
+| `blocker` | For `draft` and `failed`: the question asked, or what stopped it |
+
+That row is all the controller keeps. It is what Step 7 assembles the morning summary from,
+which is why the summary is built out of results rather than reconstructed from a transcript.
+A subagent that returns prose instead has handed back the transcript problem; record what you
+can from it, note that it did not honour the contract, and carry on.
+
+## Step 6: When a ticket blocks or fails
+
+An unattended batch has nobody to ask. So instead of stopping and waiting, the subagent working
+the ticket:
+
+1. Writes the question as a comment on the ticket.
+2. Pushes a **draft** PR carrying the work so far (`gh pr create --draft`), referencing it.
+3. Leaves the ticket In Progress.
+4. Returns `outcome: draft` with the question as its `blocker`.
 
 Draft is load-bearing: preview automation filters drafts out, so blocked work survives and
 stays reviewable without polluting the environment used to review the PRs that finished. In
@@ -179,15 +228,25 @@ worth keeping, but it is not a merge candidate."
 The answer then lands in the ticket as durable context, so a re-dispatch starts from a better
 brief than the original. The loop compounds rather than merely parallelizes.
 
+**A subagent that fails outright is one row in the summary, not the end of the night.** It
+returned `failed`, or it errored, or it came back with nothing usable at all. Record what you
+have — the ticket, `failed`, and whatever it said — and dispatch the next ticket. Do not
+re-dispatch the one that failed, and do not try to finish its work here: this session has no
+worktree, no context, and no business acquiring either. Failure isolation is the point of
+dispatching this way, and it is only real if the loop actually keeps going.
+
 ## Step 7: Morning summary
 
-Report, so the night does not have to be reconstructed by hand across the tracker:
+Assemble it from the rows Step 5 collected — one per dispatched ticket — plus the three groups
+Step 2 returned. That is the whole input, and it is why the night does not have to be
+reconstructed by hand across the tracker or read back out of a transcript:
 
 | Section | Contents |
 |---|---|
 | Dispatched | Every ticket the loop started |
-| PRs open | Ticket, PR URL, one line on what changed |
-| Blocked with questions | Ticket, the question asked, the draft PR |
+| PRs open | Ticket, PR URL, one line on what changed — the `pr` rows |
+| Blocked with questions | Ticket, the question asked, the draft PR — the `draft` rows |
+| Failed | Ticket and what came back — the `failed` rows, if any |
 | Below the cap | Every `belowCap` id from Step 2, in order — tonight's queue, not tonight's rejects |
 | Skipped and why | Every `skipped` entry from Step 2, verbatim reason |
 
@@ -213,3 +272,8 @@ Then stop. Merging the night's PRs is a morning decision, made by a human lookin
 | "Over the cap is skipped, same table" | Different questions. `skipped` is why a ticket must not run; `belowCap` is what a bigger cap would have picked up. Merged, neither is answerable. |
 | "A dry run may as well make the worktrees, they're cheap" | A dry run has no side effects at all. No branches, no worktrees, no ticket state changes — that is the only reason it is safe to run before anything is decided. |
 | "The dry run found nothing, quiet night" | Check whether selection *failed*. Three empty groups mean nothing was eligible; a non-zero exit means nothing was evaluated. |
+| "I'll just run csw:work here, it's one extra ticket" | Then this session carries that ticket into the next one. Every dispatch is a fresh subagent, without exception. |
+| "A fork keeps the context I need" | The context you keep is the contamination. A fork inherits everything; a subagent inherits the reference. |
+| "Give the subagent an isolated worktree so it starts clean" | `csw:work` Step 4 makes the worktree, on the branch derived from the ticket. Pre-isolating it strands the work on a name nothing downstream can find. |
+| "The subagent stalled, I'll pick up where it left off" | One failure is one row in the summary. Record it and dispatch the next ticket. |
+| "I'll paste its transcript into the summary" | The summary is assembled from returned rows. A transcript in the summary is the problem the subagents exist to remove. |
