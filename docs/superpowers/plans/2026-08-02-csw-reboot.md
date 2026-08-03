@@ -78,6 +78,7 @@ done
 failed=0
 for t in tests/test-*.sh; do
   [ -f "$t" ] || continue
+  case "$t" in */test-helpers.sh) continue ;; esac
   printf '\n=== %s ===\n' "$t"
   if bash "$t"; then
     printf 'ok   %s\n' "$t"
@@ -95,13 +96,17 @@ fi
 printf 'all test files passed\n'
 ```
 
-`tests/test-helpers.sh`:
+`tests/test-helpers.sh` matches `tests/test-*.sh` itself, so `run-tests.sh` must skip it explicitly —
+otherwise it would try to execute the shared-fixture file as if it were its own test and report a
+spurious pass or a confusing failure.
 
 ```bash
 #!/usr/bin/env bash
 # Shared assertions and fixtures. Source this at the top of every test file.
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+# Used by the test files that source this library; shellcheck cannot see across `source`.
+# shellcheck disable=SC2034
 BIN="$REPO_ROOT/bin"
 PASSES=0
 FAILURES=0
@@ -736,7 +741,9 @@ Ticket-reference normalisation and branch naming. This is where `1088`, `tra-108
 - Produces: `csw-ticket normalize <ref>` → `TRA-1088`. `csw-ticket number <ref>` → `1088`.
   `csw-ticket slug <words...>` → `add-nav-vocabulary`. `csw-ticket branch <type> <ref>
   <title...>` → `feat/tra-1088-add-nav-vocabulary`.
-- Produces exit codes: `0` ok, `2` unparseable reference, empty slug, or bad usage.
+- Produces exit codes: `0` ok, `2` unparseable reference, empty slug, or bad usage, `4` a broken
+  `ticketPrefix` or `branchPattern` in the config (added in the final whole-branch review —
+  see the amendment at the end of this task).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -973,6 +980,33 @@ Expected: PASS — `29 passed, 0 failed`.
 git add bin/csw-ticket tests/test-csw-ticket.sh
 git commit -m "feat(bin): add csw-ticket for reference normalisation and branch naming"
 ```
+
+**Amendment (final whole-branch review, before merge):** four fixes landed on top of the
+implementation above; `bin/csw-ticket` and `tests/test-csw-ticket.sh` in the repo are the
+source of truth, this note is the delta.
+
+- **Nested-subshell exit swallowing.** `normalize`'s own `prefix=$(config get ticketPrefix)`
+  runs inside a subshell whenever `normalize` itself is called inside a command substitution —
+  which `branch` and `number` both do (`ticket=$(normalize "$3")`,
+  `normalized=$(normalize "$2")`). Bash does not inherit `errexit` into that nested subshell
+  without `shopt -s inherit_errexit`, so a malformed-config failure from `csw-config` (exit 3
+  or 4) was silently swallowed and `branch`/`number` reported the wrong thing: a misleading
+  "needs ticketPrefix" usage error (exit 2) instead of the real config error. Fixed by capturing
+  the exit status explicitly at both the inner call (`prefix=$(config get ticketPrefix) ||
+  exit $?`) and the two outer call sites (`|| exit $?` on `ticket=$(normalize "$3")` and
+  `normalized=$(normalize "$2")`) — the same pattern `bin/csw-config`'s own `effective()`
+  already documents and uses for the identical hazard.
+- **`validate_prefix` now dies with exit `4`, not `2`.** An invalid `ticketPrefix` is a broken
+  config, the same class of failure as `csw-config`'s and `csw-gates`'s own malformed-config
+  checks, not a bad invocation of `csw-ticket` itself.
+- **`branchPattern` is now validated in `branch`.** It was previously interpolated unchecked:
+  `"wip"` silently renders every ticket to the same branch, `null` renders to the literal string
+  `"null"`, and an object renders to `{"a":1}` — none of them noticed until two `/csw:batch`
+  tickets collide on one branch mid-unattended-night. `branch` now requires the pattern to
+  contain at least one of `<ticket>`/`<slug>`, and requires the rendered result to pass
+  `git check-ref-format --branch`; either failure exits `4` naming the bad value.
+- Six new assertions cover all of the above in `tests/test-csw-ticket.sh` (36 passed, 0 failed
+  is the current total, up from 29).
 
 ---
 
@@ -1825,6 +1859,13 @@ git add bin/csw-sweep tests/test-csw-sweep.sh
 git commit -m "feat(bin): add csw-sweep for stale branches and worktrees"
 ```
 
+**Amendment (final whole-branch review, before merge):** wording only, no behaviour change. The
+comment above the TAB/newline check in `stale_worktrees()` cited "Task 9 parses it that way" —
+a reference to this plan's own task numbering, which is scaffolding that has no business in a
+shipped 1.0.0 comment (and `skills/cleanup`, the actual Task 9, only ever calls bare
+`csw-sweep`, never `csw-sweep worktrees` directly). Reworded to describe the
+`<path><TAB><branch>` output contract on its own terms.
+
 ---
 
 ### Task 7: `skills/work` — phase 1, dispatch
@@ -2142,6 +2183,27 @@ git add skills/work tests/test-skills.sh
 git commit -m "feat(skills): add csw:work — dispatch a ticket to an open PR, then stop"
 ```
 
+**Amendment (final whole-branch review, before merge):** `skills/work/SKILL.md` in the repo is
+the source of truth; this note is the delta from the Step 3 text above.
+
+- **Step 6 gates the working tree, not just the committed diff.** `csw-gates <baseBranch>` diffs
+  against the merge base with `git diff --name-only`, which only sees committed history — but
+  Step 7, not Step 6, is where `git add -A && git commit` happens. A file written in Step 5 and
+  not yet committed (a migration, say) was invisible to Step 6 and no gate fired on it. Step 6
+  now feeds `csw-gates --files` both the committed diff against `<baseBranch>` **and**
+  `git status --porcelain` for the uncommitted working tree:
+  `{ git diff --name-only "<baseBranch>...HEAD"; git status --porcelain | cut -c4- | sed 's/.* -> //'; } | csw-gates --files`.
+  The `sed` handles `git status --porcelain`'s rename format (`R  old -> new`, which `cut -c4-`
+  alone leaves as the single string `old -> new`): it reduces that to just `new`, the path that
+  will actually exist once committed, and deliberately drops the old path since there is nothing
+  left for a gate to validate against a file that is about to stop existing.
+- **Step 8's hard stop now names the `csw:batch` case explicitly.** `batch`'s loop (Task 11)
+  expects `work` to return control after its hard stop so it can dispatch the next ticket; Step
+  8 previously said only "Then stop," with no carve-out, which read as ending the whole session
+  even under `csw:batch`. One clause now clarifies that stopping means returning control to the
+  batch loop, not the session — the hard stop against merging is unchanged.
+- Three new assertions cover both of the above in `tests/test-skills.sh`.
+
 ---
 
 ### Task 8: `skills/merge` — phase 2
@@ -2167,7 +2229,7 @@ Insert into `tests/test-skills.sh`, immediately before the final `report`:
 merge="$SKILLS/merge/SKILL.md"
 assert_contains "$(cat "$merge")" "gh pr checks" "merge: checks CI"
 assert_contains "$(cat "$merge")" "gh pr merge" "merge: merges the PR"
-assert_contains "$(cat "$merge")" "--merge --delete-branch" "merge: merge commit, delete the remote branch"
+assert_contains "$(cat "$merge")" "--merge --delete-branch" "merge: merge commit, delete the branch (local and remote)"
 assert_contains "$(cat "$merge")" "csw:cleanup" "merge: chains into cleanup"
 # The skill may *mention* --squash to forbid it; it must never *use* it.
 bad_flags=$(grep "gh pr merge" "$merge" | grep -E -- "--squash|--rebase" || true)
@@ -2176,6 +2238,10 @@ assert_eq "$(fm_field "$merge" 'disable-model-invocation')" "" "merge: stays mod
 assert_contains "$(cat "$merge")" "only ever entered after a confirmed merge" "merge: cleanup gated on a confirmed merge"
 assert_contains "$(cat "$merge")" "BLOCKED" "merge: covers mergeStateStatus BLOCKED"
 ```
+
+(The label on the `--merge --delete-branch` assertion and the two `gh pr view`/`for-each-ref`
+assertions below were added in the final whole-branch review — see the amendment at the end of
+this task.)
 
 - [ ] **Step 2: Run it to verify it fails**
 
@@ -2302,6 +2368,28 @@ Expected: PASS — `30 passed, 0 failed`.
 git add skills/merge tests/test-skills.sh
 git commit -m "feat(skills): add csw:merge — CI-gated merge that chains into cleanup"
 ```
+
+**Amendment (final whole-branch review, before merge):** `skills/merge/SKILL.md` in the repo is
+the source of truth; this note is the delta from the Step 3 text above.
+
+- **Step 4's non-zero-exit handling was backwards.** `gh pr merge <number> --merge
+  --delete-branch` also deletes the *local* branch, via `git checkout <base>` then
+  `git branch -D <branch>` — and this always runs from inside a worktree, where both of those
+  fail (`fatal: '<base>' is already used by worktree…`, `error: cannot delete branch
+  '<branch>' used by worktree…`). So the PR can merge server-side while `gh pr merge` still
+  returns non-zero for the unrelated local-cleanup failure, and the old text ("a non-zero exit
+  … means the PR is still open") was reporting exactly the false negative the design exists to
+  avoid. Step 4 now treats a non-zero exit as inconclusive and re-establishes ground truth with
+  `gh pr view <number> --json state,mergedAt`: `state: MERGED` proceeds to Step 5 regardless of
+  `gh pr merge`'s exit code; anything else is the real stop.
+- **Mechanism citation corrected.** The `--squash`/`--rebase` prohibition cited cleanup as using
+  `git branch --merged` to find stale branches. `bin/csw-sweep` (Task 6) actually uses
+  `git for-each-ref --merged`, specifically because the porcelain `git branch --merged` leaks a
+  synthetic detached-HEAD pseudo-entry. The rule itself is unchanged — squash-merges are still
+  invisible to either mechanism — only the cited mechanism was wrong.
+- The `tests/test-skills.sh` assertion label on `--merge --delete-branch` was reworded from
+  "delete the remote branch" to "delete the branch (local and remote)", matching what the flag
+  actually does; two new assertions cover the `gh pr view` re-check and the corrected citation.
 
 ---
 
@@ -2513,6 +2601,21 @@ Expected: PASS across every test file. `test-skills.sh` reports `47 passed, 0 fa
 git add skills/cleanup tests/test-skills.sh
 git commit -m "feat(skills): add csw:cleanup — unprompted sweep, tracker asks first"
 ```
+
+**Amendment (final whole-branch review, before merge):** `skills/cleanup/SKILL.md` in the repo
+is the source of truth; this note is the delta.
+
+- **Step 3 had no instruction for the primary path.** Step 2 prefers the native ExitWorktree
+  tool, which owns removal for worktrees it created — but Step 3 then unconditionally ran
+  `git worktree remove` again, which on that path fails with `fatal: '<path>' is not a working
+  tree` (exit 128). Step 3's only documented failure branch was the uncommitted-changes case, so
+  an agent hitting the "already removed" case had no instruction and could report a false
+  failure or skip the branch delete on the next line. Step 3 now branches explicitly on what
+  Step 2 did: if ExitWorktree already removed the worktree, "already gone" is success and Step 3
+  skips straight to `git worktree prune` and `git branch -d`; only the manual `cd`/`checkout`
+  fallback path (no native tool available) still runs `git worktree remove` first, and only that
+  path keeps the uncommitted-changes stop.
+- One new assertion in `tests/test-skills.sh` covers the "already gone" wording.
 
 ---
 
@@ -3054,6 +3157,14 @@ git add bin/csw-batch-filter tests/test-csw-batch-filter.sh
 git commit -m "feat(bin): add csw-batch-filter with blocked, cluster, and single-writer filters"
 ```
 
+**Amendment (final whole-branch review, before merge):** wording only, no behaviour change.
+`load_config()`'s failure path wrote `"csw-batch-filter: %s" % proc.stderr`, and
+`proc.stderr` already carries csw-config's own `"csw-config: "` prefix — stacking to
+`csw-batch-filter: csw-config: not in a git repository`. Reworded to strip that inner prefix and
+report with exactly one house prefix, matching how `bin/csw-sweep`'s `config_get()` reports the
+same class of failure (`could not read config (csw-config exited N): <message>`). The exit code
+is still propagated unchanged.
+
 ---
 
 ### Task 11: `skills/batch` — phase 4, the loop
@@ -3271,7 +3382,9 @@ Then stop. Merging the night's PRs is a morning decision, made by a human lookin
 bash tests/run-tests.sh
 ```
 
-Expected: PASS across every test file. `test-skills.sh` reports `63 passed, 0 failed`.
+Expected: PASS across every test file. `test-skills.sh` reports `63 passed, 0 failed` as of this
+task. The final whole-branch review (see the amendments on Tasks 7, 8, and 9) added six more
+assertions on top of that — `test-skills.sh` now reports `69 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 
@@ -3479,7 +3592,7 @@ git check-ignore .claude/worktrees && echo "worktrees still ignored"
       "run": "just backend migrate-checksums"
     },
     {
-      "when": "web/**/*.tsx",
+      "when": "web/**.tsx",
       "run": "just playwright-preview"
     }
   ],
@@ -3519,6 +3632,19 @@ scratch repo before committing; it needed no correction. Two sections beyond the
 plan text were added because they document behaviour that was directly observed running the
 programs and that a user configuring against this file would need: "Ticket references"
 (what `ticketPrefix` and `csw-ticket` actually accept) and "Errors" (the real exit codes).
+
+**Amendment (final whole-branch review, before merge):** three gaps found in this doc and in
+`examples/csw.json` during the final review, now folded into the version below rather than
+tracked separately:
+
+- The example `web/**/*.tsx` gate had a hole: that glob requires a directory segment between
+  `web/` and the file, so it does not match `web/x.tsx` directly under `web/` — only nested
+  files. Both the doc's copy and `examples/csw.json` now use `web/**.tsx`, which matches both,
+  and the Gates section spells out the trap explicitly.
+- The Errors table was missing exit `1` (`csw-sweep`'s bare-repository case) entirely.
+- `csw-ticket`'s reuse of exit `4` for a broken `ticketPrefix` or `branchPattern` — added in the
+  same review, see the amendment on Task 4 — was undocumented.
+
 Final version:
 
 ````markdown
@@ -3571,7 +3697,7 @@ validation run:
 ```json
 "gates": [
   { "when": "**/migrations/**", "run": "just backend migrate-checksums" },
-  { "when": "web/**/*.tsx",     "run": "just playwright-preview" }
+  { "when": "web/**.tsx",       "run": "just playwright-preview" }
 ]
 ```
 
@@ -3585,6 +3711,11 @@ Glob semantics:
 
 Patterns are anchored to the whole path, so `migrations/**` matches `migrations/0042.sql`
 but not `backend/migrations/0042.sql`. Use `**/migrations/**` for the nested case.
+
+Watch for the same trap the other way around: `web/**/*.tsx` requires a directory segment
+between `web/` and the file, because the `/` between `**` and `*.tsx` is a literal character in
+the pattern — it matches `web/nav/Menu.tsx` but **not** `web/Menu.tsx` directly under `web/`.
+Drop the middle slash — `web/**.tsx` — to match both, since `**` can absorb the separator itself.
 
 Gates exist for the checks CI cannot or does not run — a checksum regeneration that only
 matters when a migration lands, or a browser suite that only runs against a preview
@@ -3633,12 +3764,18 @@ See [examples/csw.json](../examples/csw.json) for the complete version, and this
 | Exit | Meaning |
 |---|---|
 | `0` | Success. A key explicitly set to `null` prints `null` at exit `0` — that is different from the key being absent. |
+| `1` | `csw-sweep` only: the current directory is a bare repository (no working tree), so there is nothing to sweep. |
 | `2` | Bad usage: an unknown subcommand, wrong argument count, or an unknown config key. |
 | `3` | Not inside a git repository. |
 | `4` | The config file is not valid JSON, or is valid JSON that is not a JSON object (an array, a string, a number). |
 
 `csw-gates` reuses exit `4` for a malformed `gates` value: not an array, an entry that is
 not an object, or an entry missing `when` or `run`.
+
+`csw-ticket` reuses exit `4` for a broken `ticketPrefix` or `branchPattern` — an invalid prefix,
+or a `branchPattern` that has no `<ticket>`/`<slug>` placeholder or renders to something that
+is not a legal git branch name. That is a config problem, the same class as the two rows above
+it, not a bad invocation of `csw-ticket` itself (which is exit `2`).
 ````
 
 - [x] **Step 7: Rewrite `README.md`**
@@ -3804,6 +3941,13 @@ done, CSW owns how it gets shipped and closed out.
 - Repository renamed to `claude-ship-workflow`.
 ```
 
+**Amendment (final whole-branch review, before merge):** the "Repository renamed" line above
+was written as if the rename had already happened. It had not — the rename is a step the branch
+owner takes after this merges, not part of the merge itself — so the released 1.0.0
+`CHANGELOG.md` would have shipped a false statement. Reworded in the actual file to
+`Repository rename to \`claude-ship-workflow\` is planned to follow this release, once this
+branch merges.`
+
 This alone left the file structurally broken for `CHANGELOG.md`'s pre-existing history: two
 separate `## [Unreleased]` sections (one holding real, dated content about a now-superseded
 `/csw:cleanup` post-merge-housekeeping feature; one empty, sitting directly above `0.4.0`),
@@ -3902,44 +4046,111 @@ executables work through the plugin's `PATH`, then opens the PR.
 
 ```bash
 #!/usr/bin/env bash
-# End-to-end: a fresh repo, a real config, and the full derivation chain.
+# End-to-end: a fresh repo, the real example config, and the full derivation
+# chain, proving the pieces work together rather than only in isolation.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/test-helpers.sh"
 
 repo=$(make_repo)
-cp "$REPO_ROOT/examples/csw.json" "$repo/.claude-tmp.json" 2>/dev/null
 mkdir -p "$repo/.claude"
 cp "$REPO_ROOT/examples/csw.json" "$repo/.claude/csw.json"
-rm -f "$repo/.claude-tmp.json"
-cd "$repo" || exit 1
 
-# The example config must actually drive the tools it claims to.
-assert_eq "$("$BIN/csw-config" get ticketPrefix)" "TRA" "example config loads"
-assert_eq "$("$BIN/csw-ticket" normalize 1088)" "TRA-1088" "example config normalises a bare number"
-assert_eq "$("$BIN/csw-ticket" branch feat 1088 'Add nav vocabulary')" \
+# --- The example config must actually drive the tools it claims to. ---
+assert_eq "$(in_dir "$repo" "$BIN/csw-config" get ticketPrefix)" "TRA" \
+  "example config loads"
+assert_eq "$(in_dir "$repo" "$BIN/csw-ticket" normalize 1088)" "TRA-1088" \
+  "example config normalises a bare number"
+assert_eq "$(in_dir "$repo" "$BIN/csw-ticket" branch feat 1088 'Add nav vocabulary')" \
   "feat/tra-1088-add-nav-vocabulary" "example config produces the documented branch name"
-assert_eq "$(printf 'backend/migrations/0042.sql\n' | "$BIN/csw-gates" --files)" \
+assert_eq "$(printf 'backend/migrations/0042.sql\n' | in_dir "$repo" "$BIN/csw-gates" --files)" \
   "just backend migrate-checksums" "example config's migration gate fires"
-assert_eq "$(printf 'README.md\n' | "$BIN/csw-gates" --files)" "" "unrelated change triggers no gate"
+assert_eq "$(printf 'README.md\n' | in_dir "$repo" "$BIN/csw-gates" --files)" "" \
+  "unrelated change triggers no gate"
+assert_eq "$(printf 'web/Menu.tsx\n' | in_dir "$repo" "$BIN/csw-gates" --files)" \
+  "just playwright-preview" "example config's playwright gate fires on a top-level web/*.tsx file"
+assert_eq "$(printf 'web/app/nav/Menu.tsx\n' | in_dir "$repo" "$BIN/csw-gates" --files)" \
+  "just playwright-preview" "example config's playwright gate fires on a nested web/**/*.tsx file"
 
-# Every executable is executable and has a shebang.
+# --- Every executable in bin/ is executable and starts with a #!/usr/bin/env shebang. ---
 for f in "$REPO_ROOT"/bin/*; do
   name=$(basename "$f")
-  if [ -x "$f" ]; then PASSES=$((PASSES + 1)); else
-    FAILURES=$((FAILURES + 1)); printf 'FAIL bin/%s is not executable\n' "$name" >&2
+  if [ -x "$f" ]; then
+    PASSES=$((PASSES + 1))
+  else
+    FAILURES=$((FAILURES + 1))
+    printf 'FAIL bin/%s is not executable\n' "$name" >&2
   fi
   assert_contains "$(head -1 "$f")" "#!/usr/bin/env" "bin/$name has a shebang"
 done
 
-# Every skill the README advertises exists.
+# --- Every skill the README advertises exists. ---
 for s in work merge cleanup batch; do
-  if [ -f "$REPO_ROOT/skills/$s/SKILL.md" ]; then PASSES=$((PASSES + 1)); else
-    FAILURES=$((FAILURES + 1)); printf 'FAIL skills/%s/SKILL.md missing\n' "$s" >&2
+  if [ -f "$REPO_ROOT/skills/$s/SKILL.md" ]; then
+    PASSES=$((PASSES + 1))
+  else
+    FAILURES=$((FAILURES + 1))
+    printf 'FAIL skills/%s/SKILL.md missing\n' "$s" >&2
   fi
 done
 
+# --- The plugin name alone puts the commands under the csw: prefix. ---
+assert_eq "$(jq -r '.name' "$REPO_ROOT/.claude-plugin/plugin.json")" "csw" \
+  "plugin.json name is csw, which namespaces /csw:work and friends"
+
+# --- Both manifests and VERSION agree. ---
+version=$(tr -d '[:space:]' <"$REPO_ROOT/VERSION")
+assert_eq "$version" "1.0.0" "VERSION is 1.0.0"
+assert_eq "$(jq -r '.version' "$REPO_ROOT/.claude-plugin/plugin.json")" "$version" \
+  "plugin.json version matches VERSION"
+assert_eq "$(jq -r '.plugins[0].version' "$REPO_ROOT/.claude-plugin/marketplace.json")" "$version" \
+  "marketplace.json version matches VERSION"
+
+# --- csw-batch-filter end-to-end against the example config: blocked, cluster, ---
+# --- single-writer, and cap filters all firing together on one realistic input, ---
+# --- rather than each exercised in isolation. maxTickets is 3, singleWriterLabels ---
+# --- is ["migration"], per examples/csw.json. ---
+tickets='[
+  {"id":"A-1","state":"Todo","priority":2,"blockedBy":["A-9"]},
+  {"id":"A-2","state":"Todo","priority":1},
+  {"id":"A-3","state":"Todo","priority":2,"relatedTo":["A-9"]},
+  {"id":"A-4","state":"Todo","priority":3,"relatedTo":["A-9"]},
+  {"id":"A-5","state":"Todo","priority":1,"labels":["migration"]},
+  {"id":"A-6","state":"Todo","priority":4,"labels":["migration"]},
+  {"id":"A-7","state":"Todo","priority":4}
+]'
+batch_out=$(printf '%s' "$tickets" | in_dir "$repo" "$BIN/csw-batch-filter")
+assert_eq "$(printf '%s' "$batch_out" | jq -c '.selected')" '["A-2","A-5","A-3"]' \
+  "example config's cap and priority order pick the winners"
+reason() { printf '%s' "$batch_out" | jq -r --arg id "$1" '.skipped[] | select(.id == $id) | .reason'; }
+assert_contains "$(reason A-1)" "blocked by A-9" "blocked filter fires"
+assert_contains "$(reason A-4)" "cluster" "cluster filter fires"
+assert_contains "$(reason A-4)" "A-3" "cluster reason names the winner it lost to"
+assert_contains "$(reason A-6)" "single-writer" "single-writer filter fires"
+assert_contains "$(reason A-6)" "A-5" "single-writer reason names the holder"
+assert_contains "$(reason A-7)" "batch cap" "cap filter fires"
+
+# --- Cross-tool flow: derive a branch name, create and merge it, and confirm ---
+# --- the sweep reports it. ---
+branch=$(in_dir "$repo" "$BIN/csw-ticket" branch feat 1088 'Add nav vocabulary')
+in_dir "$repo" git checkout -q -b "$branch"
+printf 'nav work\n' >"$repo/nav.txt"
+in_dir "$repo" git add -A
+in_dir "$repo" git commit -qm "nav work on $branch"
+in_dir "$repo" git checkout -q main
+in_dir "$repo" git merge -q --no-ff -m "merge $branch" "$branch"
+swept=$(in_dir "$repo" "$BIN/csw-sweep" branches)
+assert_contains "$swept" "$branch" \
+  "csw-sweep reports the branch csw-ticket derived, once it is merged"
+
 report
 ```
+
+This grew well past its original shape as the branch progressed: the plugin-manifest and
+VERSION checks arrived once Task 2 had something to check, the `csw-batch-filter` and
+cross-tool-flow sections arrived once Tasks 10 and 6 existed to exercise, and the two
+`web/**.tsx` assertions (top-level and nested) arrived in the final whole-branch review fixing
+the glob hole in `examples/csw.json` (see Task 12). `cd "$repo"` was replaced with `in_dir`
+throughout so the test doesn't depend on process-wide `cd` state.
 
 - [ ] **Step 2: Run the full suite**
 
@@ -3947,7 +4158,7 @@ report
 bash tests/run-tests.sh
 ```
 
-Expected: PASS across all eight test files. Fix anything red before continuing — do not open
+Expected: PASS across all ten test files. Fix anything red before continuing — do not open
 a PR on a red suite.
 
 - [ ] **Step 3: Validate the plugin and install it locally**
