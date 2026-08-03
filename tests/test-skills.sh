@@ -102,6 +102,47 @@ else
   PASSES=$((PASSES + 1))
 fi
 
+# --- work: the interactive modifier, and everything it does not change ---
+
+# The word has to be discoverable from the hint, or the only people who type it are the
+# ones who already read the skill — and they are not who the ambiguity bit.
+assert_contains "$(fm_field "$work" 'argument-hint')" "interactive" \
+  "work: the interactive modifier is discoverable from the argument hint"
+assert_contains "$(cat "$work")" "superpowers:brainstorming" \
+  "work: interactive brainstorms the ticket before planning it"
+assert_contains "$(cat "$work")" "wait for the answers" \
+  "work: an interactive run waits for answers instead of proceeding unattended"
+
+# Step 5 skips brainstorming because nobody is there to brainstorm with. On an interactive
+# run somebody is, so the skip has to be conditional rather than absolute — an unconditional
+# "skip brainstorming" in Step 5 silently undoes what Step 1 was asked to do.
+assert_contains "$(cat "$work")" "unless this run is interactive" \
+  "work: Step 5's skip-brainstorming rule yields to an interactive run"
+
+# Silently discarding a word someone deliberately typed is how a dispatch does something
+# other than what was asked. All three of these have to be present: what was passed, that
+# it is not recognised, and the question.
+assert_contains "$(cat "$work")" "An unrecognised modifier is not ignored" \
+  "work: an unrecognised modifier is never silently discarded"
+assert_contains "$(cat "$work")" "say it is not recognised" \
+  "work: an unrecognised modifier is named back and called unrecognised"
+
+# interactive changes how the work is planned and nothing else. If it were read as
+# "a human is watching, so the usual rules are softer", it would erode the one guarantee
+# every other step in this skill exists to hold.
+assert_contains "$(cat "$work")" "changes only how the work is planned" \
+  "work: interactive leaves validation, gates and the PR untouched"
+assert_contains "$(cat "$work")" "still ends at an open pull request and still never merges" \
+  "work: an interactive run stops at Step 8 like any other"
+
+# Red flags are where an agent looks when it is about to rationalise, so both failure
+# modes have to be answered there too, not only in the step prose.
+work_red_flags=$(sed -n '/^## Red flags/,$p' "$work")
+assert_contains "$work_red_flags" "modifier" \
+  "work: red flags catch a modifier being waved through"
+assert_contains "$work_red_flags" "interactive" \
+  "work: red flags deny that interactive relaxes the hard stop"
+
 # --- merge: never squash, always check CI, always chain into cleanup ---
 merge="$SKILLS/merge/SKILL.md"
 assert_contains "$(cat "$merge")" "gh pr checks" "merge: checks CI"
@@ -214,6 +255,11 @@ else
   FAILURES=$((FAILURES + 1))
   printf 'FAIL batch: warns about the blocking-relation prerequisite\n' >&2
 fi
+# csw:work now takes an `interactive` modifier, which brainstorms and waits for answers.
+# A batch runs overnight with nobody to answer, so the dispatch has to say the reference
+# goes over on its own.
+assert_contains "$(cat "$batch")" "the ticket reference and nothing else" \
+  "batch: dispatches csw:work with no modifier, so no ticket can stop for answers"
 assert_contains "$(cat "$batch")" "A failed selection is never an empty selection" \
   "batch: a filter failure is reported distinctly from an empty batch"
 assert_contains "$(cat "$batch")" "can only lower tonight's cap, never raise it" \

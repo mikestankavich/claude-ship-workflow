@@ -22,6 +22,16 @@ go for merge                # merge: CI gate, merge commit, chains into cleanup
 autonomously test-first, validates, and opens a PR. Then it stops. Hold-for-review is a hard
 stop, not a checkpoint to talk past.
 
+```
+/csw:work ENG-1088 interactive
+```
+
+Same dispatch, planned out loud. It brainstorms the ticket first, surfaces the questions, and
+waits for your answers before it writes a plan — for the tickets that are vague, or where the
+approach has more than one defensible shape. Everything after planning is unchanged: same
+validation, same gates, same PR, same hard stop. A word that is neither this nor nothing gets
+named back and asked about rather than quietly dropped.
+
 **Merge** is natural language, not a command — `go for merge`, `diffs look good`, `merge it`
 — because it is said mid-conversation where a slash command is friction. An ambiguous "looks
 good" earns a clarifying question rather than a merge. CI red stops it.
@@ -101,6 +111,7 @@ A different project is a config file, not a fork. Full reference:
 | Command | Phase | Invocation |
 |---|---|---|
 | `/csw:work <ticket>` | Dispatch | Command, or "work ENG-1088" |
+| `/csw:work <ticket> interactive` | Dispatch | Brainstorms first, then the same run |
 | `/csw:merge` | Merge | Usually natural language: "go for merge" |
 | `/csw:cleanup` | Cleanup | Usually automatic, chained from merge |
 | `/csw:batch` | Nightly loop | Command only — never inferred |

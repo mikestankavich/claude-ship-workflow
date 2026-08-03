@@ -149,8 +149,14 @@ reports what happened.
 
 ## Step 5: Dispatch each, in order
 
-For each selected ticket, run **csw:work** with that ticket reference. Let it run to its hard
-stop at an open PR, then move to the next one. One worktree and one PR per ticket.
+For each selected ticket, run **csw:work** with the ticket reference and nothing else. Let it
+run to its hard stop at an open PR, then move to the next one. One worktree and one PR per
+ticket.
+
+Nothing else, because `csw:work` takes an `interactive` modifier that brainstorms the ticket
+and waits for a human to answer. At 3am there is nobody to answer, and a ticket parked on an
+unanswered question is a night that stops on the first one rather than working the rest. A
+ticket that genuinely needs the conversation is a ticket for tomorrow, dispatched by hand.
 
 ## Step 6: When a ticket blocks
 
