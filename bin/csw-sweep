@@ -81,7 +81,8 @@ stale_branches() {
   if [ -n "$upstream" ]; then
     merged=$(printf '%s\n%s\n' "$merged" "$(merged_into "$upstream")")
   fi
-  # Upstream deleted — what `gh pr merge --delete-branch` leaves behind.
+  # Upstream deleted — what `gh pr merge --delete-branch` leaves behind. See
+  # prune_note(): this arm is only as current as the last prune.
   gone=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null \
     | awk '$2 == "[gone]" { print $1 }')
   # The base itself is excluded -- it is the thing everything else is measured
@@ -118,6 +119,47 @@ base_behind_note() {
   [ -n "$count" ] && [ "$count" != "0" ] || return 0
   printf 'note: local %s is %s commit(s) behind %s (not fetched); swept against both\n' \
     "$BASE" "$count" "$upstream"
+}
+
+# The same treatment for the other silent staleness, the one that hides whole
+# branches rather than a few commits.
+#
+# stale_branches()'s `[gone]` arm reads `%(upstream:track)`, which reports
+# `[gone]` only once the upstream ref is missing *locally* -- a statement about
+# `refs/remotes`, not about the server. Deleting a branch on the forge, which is
+# exactly what `gh pr merge --delete-branch` does, leaves
+# `refs/remotes/origin/<name>` on disk until something prunes, and a plain
+# `git fetch`/`git pull` does not. csw-sweep cannot close that gap itself:
+# never fetching is a deliberate invariant (see base_upstream), and pruning
+# mutates refs. It cannot even detect the gap -- a live upstream and an unpruned
+# dead one are indistinguishable from here. So say what it depends on.
+#
+# Only when it could change the answer, though. The branches at risk are those
+# that still have a resolving upstream, are not the base, and are not already in
+# the report: those are precisely the names a prune could add. With none of them
+# the caveat has nothing to attach to, and a note on every clean sweep is noise
+# that teaches the reader to skip the note line -- which would cost the
+# base_behind_note above its audience too.
+prune_note() { # branch names already in the report, one per line
+  local reported=$1 at_risk count
+  # `%(upstream)` is read from config and stays set after a prune, so it is the
+  # test for "has an upstream at all"; `%(upstream:track)` then separates a
+  # known-gone upstream from one that still resolves. Neither a branch name nor
+  # an upstream ref name can contain a TAB, so it is a safe field separator.
+  at_risk=$(git for-each-ref --format='%(refname:short)%09%(upstream)%09%(upstream:track)' refs/heads 2>/dev/null \
+    | awk -F'\t' '$2 != "" && $3 != "[gone]" { print $1 }' \
+    | grep -Fvx "$BASE" || true)
+  # Subtract what is already reported. Done in awk against an exact-match set
+  # rather than `grep -vf`, whose patterns would be substrings and would drop
+  # `feat/a` from the at-risk set merely because `feat/ab` was reported.
+  count=$(printf '%s\n' "$at_risk" | awk -v rep="$reported" '
+    BEGIN { n = split(rep, a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") seen[a[i]] = 1 }
+    $0 != "" && !($0 in seen) { c++ }
+    END { print c + 0 }
+  ')
+  [ "$count" != "0" ] || return 0
+  printf 'note: upstream-gone detection is only as fresh as the last prune; %s branch(es) still resolve their upstream and may already be deleted on the remote (git fetch --prune)\n' \
+    "$count"
 }
 
 # The main working tree's root, or empty if it cannot be determined. Used to
@@ -193,9 +235,10 @@ case "${1:-}" in
   ''|report)
     b=$(stale_branches)
     w=$(stale_worktrees)
-    # Before the findings, and before "nothing to sweep" — the caveat has to
+    # Before the findings, and before "nothing to sweep" — the caveats have to
     # reach the reader whether or not anything was found.
     base_behind_note
+    prune_note "$b"
     if [ -z "$b" ] && [ -z "$w" ]; then
       printf 'nothing to sweep\n'
       exit 0

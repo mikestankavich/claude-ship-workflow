@@ -117,13 +117,23 @@ latest:
 
 ```bash
 git checkout "<baseBranch>"
-git pull
+git pull --prune
 ```
 
 `git pull` is not optional and is not only for the manual path. The merge you just landed
 is on the remote, not in this checkout — skip the pull and the local base branch sits one
 commit behind from the moment cleanup finishes, which then silently backdates the next
 worktree branched from it. If the pull fails, say so and stop before removing anything.
+
+`--prune` is not cosmetic either — it is what makes Step 4's sweep able to see anything at
+all. `csw-sweep` finds upstream-deleted branches through `%(upstream:track)` reporting
+`[gone]`, and that says `[gone]` only once `refs/remotes/origin/<name>` is missing **locally**.
+Merging with `--delete-branch` deletes the branch on the forge; **only a prune** removes the
+remote-tracking ref that mirrors it, and a plain `git pull` does not prune. Drop the flag and
+that half of the sweep silently never fires — every leftover it reports comes from the
+merged-into-base half instead, which is exactly the half that cannot see a branch that shipped
+without becoming an ancestor of the base. The sweep cannot do this for itself: it must never
+fetch, and pruning mutates refs.
 
 ## Step 3: Remove this worktree and branch
 
@@ -182,6 +192,13 @@ This is the part that turns *"any remaining worktrees or merged branches?"* from
 someone has to remember into something reported unprompted. Report what it found even when
 it found nothing.
 
+The sweep may lead with a `note:` line — the local base being behind its upstream, or
+upstream-gone detection being only as fresh as the last prune. Those are caveats on how far
+the answer reaches, so pass them on with the findings rather than trimming them off. On the
+chained path Step 2's `git pull --prune` has already refreshed the prune half; a prune note
+surviving that means some branch still resolves an upstream this run has not pruned since, and
+it is honest reporting, not a failure.
+
 Then **ask before touching any of it**. These are other people's leftovers as far as this
 session is concerned — list them, propose removing them, and wait. A vague "sure, clean it
 up" is not approval for a list: either they name what goes, or ask again.
@@ -203,7 +220,7 @@ of the sweep — land first, then delete:
 
 ```bash
 git checkout "<baseBranch>"
-git pull
+git pull --prune
 git branch -d "<the current branch the sweep flagged>"
 ```
 
@@ -277,6 +294,8 @@ is clean, even when it is obvious. Propose it, name what you would set it to, an
 | "The ticket is clearly done, I'll close it" | Always ask. Every time. |
 | "The sweep is empty, nothing to report" | Report the empty sweep. Silence reads as "not checked". |
 | "`csw-sweep` printed nothing, so there's nothing stale" | Check the exit code. Non-zero means the sweep did not run — unknown is not the same as absent. |
+| "`--prune` on the pull is tidiness, I'll use plain `git pull`" | It is load-bearing. Without it `[gone]` never fires and half the sweep silently stops working. |
+| "The sweep's `note:` line is chatter, I'll report the findings" | The note says how far the answer reaches. Report it with the findings. |
 | "The PR is merged, so ExitWorktree's discard warning is obviously spurious" | Prove it. `git merge-base --is-ancestor "$head_sha" origin/<base>` exiting 0, or stop. Reflexive `discard_changes: true` is how real work gets deleted. |
 | "The warning names a branch that no longer exists, so it's stale nonsense" | The name is display only; the commit count is correct. Run the `merge-base` check — do not dismiss it, and do not stall on it either. |
 | "The sweep flagged the branch I'm on, so it must be confused" | It is not. Land on the base branch, then delete it. Standing on shipped work is the ordinary case, not an anomaly. |
