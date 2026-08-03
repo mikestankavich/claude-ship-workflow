@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# csw-sweep — find merged-but-undeleted branches and the worktrees holding them.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+
+die() {
+  printf 'csw-sweep: %s\n' "$1" >&2
+  exit "${2:-1}"
+}
+
+# A bare repository has no working tree. `git worktree list`, `git branch
+# --show-current`, and csw-config's toplevel lookup all behave in confusing
+# ways there, and csw-config's own error ("not in a git repository") is
+# actively misleading for this case -- a bare repo IS a git repository, just
+# one without a working tree. Catch it here with a specific message before
+# any of that runs.
+if [ "$(git rev-parse --is-bare-repository 2>/dev/null || printf 'false')" = "true" ]; then
+  die "needs a working tree; this is a bare repository" 1
+fi
+
+# Sweep results are never an error -- finding nothing is information, and
+# always exits 0. Environment failures (not a repo, malformed config) are a
+# different matter: surface them as csw-sweep's own message naming which
+# config lookup failed, propagating the underlying exit code, rather than
+# leaking csw-config's wording (or a raw command-not-found-style failure)
+# straight to the user.
+config_get() { # key
+  local value status=0
+  value=$("$HERE/csw-config" get "$1" 2>/dev/null) || status=$?
+  if [ "$status" -ne 0 ]; then
+    die "could not read config value '$1' (csw-config exited $status)" "$status"
+  fi
+  printf '%s' "$value"
+}
+
+BASE=$(config_get baseBranch)
+
+usage() {
+  cat <<'EOF'
+Usage:
+  csw-sweep            Human-readable report of stale branches and worktrees
+  csw-sweep branches   One stale local branch per line
+  csw-sweep worktrees  <path><TAB><branch> per line for worktrees holding one
+EOF
+}
+
+stale_branches() {
+  local current merged gone
+  current=$(git branch --show-current 2>/dev/null || true)
+  # Merged into the base. Requires --merge merges; squash-merges are invisible here.
+  # Plumbing, not `git branch --merged`: the porcelain command emits a synthetic
+  # "(HEAD detached at ...)" pseudo-entry when HEAD is detached, which is not a
+  # branch name and must never reach the output. for-each-ref only walks real refs.
+  merged=$(git for-each-ref --format='%(refname:short)' --merged "$BASE" refs/heads 2>/dev/null || true)
+  # Upstream deleted — what `gh pr merge --delete-branch` leaves behind.
+  gone=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null \
+    | awk '$2 == "[gone]" { print $1 }')
+  printf '%s\n%s\n' "$merged" "$gone" \
+    | sed -e '/^$/d' \
+    | sort -u \
+    | grep -Fvx "$BASE" \
+    | grep -Fvx "${current:-@@no-current-branch@@}" \
+    || true
+}
+
+stale_worktrees() {
+  local stale path ref short
+  stale=$(stale_branches)
+  if [ -z "$stale" ]; then return 0; fi
+  # Hand path/ref pairs from awk to the read loop NUL-delimited, not
+  # TAB-delimited: a worktree path is free to contain a literal TAB (rare,
+  # but git allows it), and splitting on TAB would silently mis-parse such a
+  # path -- truncating it and corrupting the next field -- dropping the
+  # worktree from the sweep with no error. NUL cannot appear in a path on any
+  # filesystem git supports, so it is a safe internal separator regardless of
+  # what the path itself contains.
+  git worktree list --porcelain | awk '
+    /^worktree /  { path = substr($0, 10); ref = "" }
+    /^branch /    { ref = substr($0, 8) }
+    /^$/          { if (path != "") printf "%s%c%s%c", path, 0, ref, 0; path = "" }
+    END           { if (path != "") printf "%s%c%s%c", path, 0, ref, 0 }
+  ' | while IFS= read -r -d '' path && IFS= read -r -d '' ref; do
+    if [ -z "$ref" ]; then continue; fi
+    # The output contract is <path><TAB><branch>, one worktree per line, so a
+    # line-oriented consumer can split each line on its first TAB. A path
+    # that itself contains a TAB -- or a newline, which would break
+    # line-oriented consumers -- cannot be represented in that contract.
+    # Fail loudly and specifically rather than silently truncating or
+    # mis-parsing: a missed stale worktree is exactly the failure this
+    # program exists to prevent. (A literal newline embedded in a path
+    # cannot actually survive `git worktree list --porcelain`'s line-based
+    # framing in the first place -- the newline would already have split it
+    # into a separate, unrecognized record upstream of this check -- but the
+    # check is kept as defense in depth in case that framing ever changes.)
+    case "$path" in
+      *"$(printf '\t')"*)
+        die "worktree path contains a TAB, which the <path><TAB><branch> output format cannot represent: $path" 2
+        ;;
+      *$'\n'*)
+        die "worktree path contains a newline, which the <path><TAB><branch> output format cannot represent: $path" 2
+        ;;
+    esac
+    short=${ref#refs/heads/}
+    if printf '%s\n' "$stale" | grep -Fqx "$short"; then
+      printf '%s\t%s\n' "$path" "$short"
+    fi
+  done
+}
+
+case "${1:-}" in
+  branches)
+    stale_branches
+    ;;
+  worktrees)
+    stale_worktrees
+    ;;
+  ''|report)
+    b=$(stale_branches)
+    w=$(stale_worktrees)
+    if [ -z "$b" ] && [ -z "$w" ]; then
+      printf 'nothing to sweep\n'
+      exit 0
+    fi
+    if [ -n "$w" ]; then
+      printf 'Stale worktrees:\n'
+      printf '%s\n' "$w" | sed -e 's/^/  /' -e "s/$(printf '\t')/  ->  /"
+    fi
+    if [ -n "$b" ]; then
+      printf 'Merged or upstream-gone branches:\n'
+      printf '%s\n' "$b" | sed -e 's/^/  /'
+    fi
+    ;;
+  -h|--help)
+    usage
+    ;;
+  *)
+    printf 'csw-sweep: unknown subcommand: %s\n' "$1" >&2
+    exit 2
+    ;;
+esac

@@ -5,56 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-08-02
+
+CSW is now Claude **Ship** Workflow. Complete rewrite: superpowers owns how the work gets
+done, CSW owns how it gets shipped and closed out.
 
 ### Added
+- `/csw:work <ticket>` — dispatch a ticket into a worktree, drive it autonomously to an open
+  pull request, then hard-stop for review.
+- `/csw:merge` — CI-gated merge on natural-language approval, chaining into cleanup.
+- `/csw:cleanup` — worktree and branch removal plus an unprompted sweep for other stale
+  branches and worktrees. Always asks before closing a ticket.
+- `/csw:batch` — nightly loop with blocked, same-surface-cluster, and single-writer filters
+  and a morning summary.
+- `.claude/csw.json` config layer, so a different project is a config file rather than a fork.
+- `bin/csw-config`, `bin/csw-ticket`, `bin/csw-gates`, `bin/csw-sweep`, `bin/csw-batch-filter`.
+- Bash test suite and CI.
 
-- `/csw:cleanup` command for post-merge housekeeping (branch cleanup, remote pruning, issue status check)
-- Linear issue detection in PR body/comments with optional MCP-powered closure
-- Squash merge support in `extract_pr_from_commit()` (matches `(#123)` suffix pattern)
+### Removed
+- **BREAKING:** `/csw:spec`, `/csw:plan`, `/csw:build`, `/csw:check`, `/csw:ship`, the `csw`
+  binary, `spec/` trees, presets, and templates. Old and new must not coexist. Use
+  [superpowers](https://github.com/obra/superpowers) for that half of the workflow.
 
-## [0.1.0] - 2025-10-11
-
-> **Pre-release for dogfooding**: Initial implementation to be validated through real-world use before v1.0.0 public release.
-
-### Added
-
-- Specification-driven development workflow with 5 slash commands: `/spec`, `/plan`, `/build`, `/check`, `/ship`
-- Cross-platform installation scripts (Unix .sh + Windows .ps1)
-- Project initialization system (`init-project` and `init-stack`)
-- Stack configuration presets: TypeScript + React + Vite, Next.js App Router, Python + FastAPI, Go standard, Monorepo (Go + React + TimescaleDB)
-- Template system for specs, configs, and documentation
-- Example specification: User Profile Editing feature
-- Automatic complexity assessment (0-10 scoring) in `/plan` command
-- Complexity scoring based on file impact, subsystem coupling, task count, dependencies, and pattern novelty
-- Mandatory split recommendation for features scoring 6-10/10
-- Optional phase breakdown generation for complex features
-- Mandatory clarifying questions gate before plan generation
-- Quality/confidence scoring in implementation plans with one-pass success probability
-- ULTRATHINK strategic thinking checkpoints in all 5 commands
-- Mandatory validation gates: lint, types, tests, build (BLOCKING requirements)
-- Full test suite gate before any commit in `/build` (cannot skip, 100% pass required)
-- Code cleanup gate before final validation (removes console.log, debugger, commented code)
-- Auto-detection and defaults for Node/TypeScript, Rust, Go, Python stacks
-- Stack-aware validation commands and patterns
-- Workspace-aware validation for monorepo projects
-- Success Metrics section in spec template with tracking in SHIPPED.md
-- Conventional Commits format with semantic versioning support
-- Role-based personas for each command (Product Engineer, Architect, Engineer, Test Engineer, Tech Lead)
-- Automatic archival of shipped features during `/plan` with y/n prompts
-- SHIPPED.md tracking with date, commit, and success metrics
-- Comprehensive README with installation and usage instructions
-- Installation guides for macOS, Linux, and Windows
-- Quick start guide with step-by-step workflow
-- Stack configuration examples for single-stack and monorepo projects
-- Complexity assessment methodology and examples
-- Conventional commit format examples
-- Troubleshooting sections for validation and workflow issues
-- MIT License
-
-## [Unreleased]
-
-_No unreleased changes._
+### Changed
+- Ships as a Claude Code plugin marketplace instead of a shell installer.
+- Repository rename to `claude-ship-workflow` is planned to follow this release, once this
+  branch merges.
 
 ## [0.4.0] - 2026-03-23
 
@@ -334,3 +310,42 @@ _No other unreleased changes. See README.md Roadmap section for planned features
 - Inline stack detection and defaults from all commands
 - YAML config format and parsing logic
 - `spec/config.md` references throughout documentation
+
+## [0.1.0] - 2025-10-11
+
+> **Pre-release for dogfooding**: Initial implementation to be validated through real-world use before v1.0.0 public release.
+
+### Added
+
+- Specification-driven development workflow with 5 slash commands: `/spec`, `/plan`, `/build`, `/check`, `/ship`
+- Cross-platform installation scripts (Unix .sh + Windows .ps1)
+- Project initialization system (`init-project` and `init-stack`)
+- Stack configuration presets: TypeScript + React + Vite, Next.js App Router, Python + FastAPI, Go standard, Monorepo (Go + React + TimescaleDB)
+- Template system for specs, configs, and documentation
+- Example specification: User Profile Editing feature
+- Automatic complexity assessment (0-10 scoring) in `/plan` command
+- Complexity scoring based on file impact, subsystem coupling, task count, dependencies, and pattern novelty
+- Mandatory split recommendation for features scoring 6-10/10
+- Optional phase breakdown generation for complex features
+- Mandatory clarifying questions gate before plan generation
+- Quality/confidence scoring in implementation plans with one-pass success probability
+- ULTRATHINK strategic thinking checkpoints in all 5 commands
+- Mandatory validation gates: lint, types, tests, build (BLOCKING requirements)
+- Full test suite gate before any commit in `/build` (cannot skip, 100% pass required)
+- Code cleanup gate before final validation (removes console.log, debugger, commented code)
+- Auto-detection and defaults for Node/TypeScript, Rust, Go, Python stacks
+- Stack-aware validation commands and patterns
+- Workspace-aware validation for monorepo projects
+- Success Metrics section in spec template with tracking in SHIPPED.md
+- Conventional Commits format with semantic versioning support
+- Role-based personas for each command (Product Engineer, Architect, Engineer, Test Engineer, Tech Lead)
+- Automatic archival of shipped features during `/plan` with y/n prompts
+- SHIPPED.md tracking with date, commit, and success metrics
+- Comprehensive README with installation and usage instructions
+- Installation guides for macOS, Linux, and Windows
+- Quick start guide with step-by-step workflow
+- Stack configuration examples for single-stack and monorepo projects
+- Complexity assessment methodology and examples
+- Conventional commit format examples
+- Troubleshooting sections for validation and workflow issues
+- MIT License

@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# csw-gates — print the extra validation commands this diff triggers.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+
+die() { printf 'csw-gates: %s\n' "$1" >&2; exit "$2"; }
+
+usage() {
+  cat <<'EOF'
+Usage:
+  csw-gates <base-ref>   Diff <base-ref>...HEAD and print the gates it triggers
+  csw-gates --files      Read a newline-separated file list from stdin instead
+EOF
+}
+
+# Convert a config glob to an anchored POSIX extended regex.
+# ** crosses slashes, * does not, ? matches one non-slash character.
+glob_to_regex() {
+  local g=$1 out='' c i
+  i=0
+  while [ "$i" -lt "${#g}" ]; do
+    c=${g:i:1}
+    # A literal backslash must become the two-character ERE `\\`. Handled here,
+    # ahead of the case, because case-pattern quoting can't match it: a
+    # single-quoted '\\' pattern requires the tested value to contain two
+    # backslash characters, but $c is always exactly one — that arm can never
+    # fire, so a lone backslash used to fall through unescaped into the regex.
+    if [ "$c" = '\' ]; then
+      out="${out}\\\\"
+      i=$((i + 1))
+      continue
+    fi
+    case $c in
+      '*')
+        if [ "${g:i+1:1}" = '*' ]; then
+          out="${out}.*"
+          i=$((i + 1))
+        else
+          out="${out}[^/]*"
+        fi
+        ;;
+      '?')
+        out="${out}[^/]"
+        ;;
+      '.'|'['|']'|'('|')'|'{'|'}'|'+'|'^'|'$'|'|') out="${out}\\$c" ;;
+      *) out="${out}$c" ;;
+    esac
+    i=$((i + 1))
+  done
+  printf '^%s$' "$out"
+}
+
+case "${1:-}" in
+  ''|-h|--help)
+    usage
+    exit 0
+    ;;
+  --files)
+    files=$(cat)
+    ;;
+  *)
+    # Silence git's own error output (a ~50-line usage dump on a bad ref, or
+    # a "not a git repository" warning outside one) so only this script's own
+    # die() message reaches the user.
+    files=$(git diff --name-only "$1...HEAD" 2>/dev/null) || die "cannot diff $1...HEAD" 2
+    ;;
+esac
+
+# Blank lines are never real paths. Strip them before anything tries to match
+# against them: `printf '%s\n' "$files"` turns an empty `$files` (a zero-file
+# diff, or empty stdin) into exactly one blank line, and `grep -Eq` happily
+# matches that blank line against any glob that can match the empty string —
+# `**`, `*`, `*.sql`, etc. — so a catch-all gate would otherwise fire on a
+# no-op diff. Filtering here also means a file list with blank lines
+# interleaved among real paths (`a.txt`, ``, `b.txt`) matches exactly as if
+# the blank lines were absent, since every match below reads this same
+# already-filtered `$files`.
+files=$(printf '%s\n' "$files" | grep -v '^$') || files=''
+
+# Nothing to match against: print nothing and exit 0 without evaluating any
+# gate — not even a malformed-config check, since there is nothing a gate
+# could have fired on either way.
+if [ -z "$files" ]; then
+  exit 0
+fi
+
+gates=$("$HERE/csw-config" get gates)
+
+# The "gates" config key must be a JSON array — {} or a bare string would
+# otherwise leak a raw jq trace and an undocumented exit code the first time
+# something below tries to index or iterate it. Same failure class as
+# csw-config's "config must be a JSON object" check, so it gets the same
+# exit code: 4, malformed config.
+#
+# `csw-config get` unwraps a top-level JSON string to raw unquoted text (so
+# scalar keys like ticketPrefix print without quotes), which means a
+# string-valued "gates" arrives here as text that isn't valid JSON at all —
+# a second, unguarded `jq -r 'type'` on it would itself fail to parse and
+# print its own trace to stderr. Suppress that and fall back to a plain
+# description instead, so only this script's own die() message reaches the
+# user, in every case.
+gates_type=$(printf '%s' "$gates" | jq -r 'type' 2>/dev/null) || gates_type='valid JSON'
+if [ "$gates_type" != array ]; then
+  die "config key \"gates\" must be an array, not $gates_type" 4
+fi
+
+count=$(printf '%s' "$gates" | jq 'length')
+
+emitted=''
+i=0
+while [ "$i" -lt "$count" ]; do
+  entry_type=$(printf '%s' "$gates" | jq -r ".[$i] | type")
+  if [ "$entry_type" != object ]; then
+    die "gates[$i] must be an object, not $entry_type" 4
+  fi
+  when=$(printf '%s' "$gates" | jq -r ".[$i].when // empty")
+  run=$(printf '%s' "$gates" | jq -r ".[$i].run // empty")
+  # Silently skipping a configured gate is a wrong answer, not a safe
+  # default — a migration-checksum gate that quietly never runs is the exact
+  # failure this program exists to prevent. Reject it instead.
+  if [ -z "$when" ] || [ -z "$run" ]; then
+    die "gates[$i] is missing \"when\" or \"run\"" 4
+  fi
+  i=$((i + 1))
+  regex=$(glob_to_regex "$when")
+  if printf '%s\n' "$files" | grep -Eq "$regex"; then
+    if ! printf '%s' "$emitted" | grep -Fxq -- "$run"; then
+      printf '%s\n' "$run"
+      emitted="${emitted}${run}
+"
+    fi
+  fi
+done

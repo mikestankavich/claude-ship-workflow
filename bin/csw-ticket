@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# csw-ticket — normalise ticket references and derive branch names.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+
+die() { printf 'csw-ticket: %s\n' "$1" >&2; exit "$2"; }
+config() { "$HERE/csw-config" "$@"; }
+
+usage() {
+  cat <<'EOF'
+Usage:
+  csw-ticket normalize <ref>                 1088 | tra-1088 | TRA-1088  ->  TRA-1088
+                                             68 | #68  ->  68   (tracker: github)
+  csw-ticket number <ref>                    TRA-1088                    ->  1088
+  csw-ticket slug <words...>                 "Add nav vocabulary"        ->  add-nav-vocabulary
+  csw-ticket branch <type> <ref> <title...>  feat TRA-1088 "Add nav ..." ->  feat/tra-1088-add-nav-vocabulary
+EOF
+}
+
+slugify() {
+  local s
+  s=$(printf '%s' "$*" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -e 's/[^a-z0-9]\{1,\}/-/g' -e 's/^-\{1,\}//' -e 's/-\{1,\}$//')
+  # Truncate to 40 characters, then drop a dash the cut may have left dangling.
+  s=$(printf '%s' "$s" | cut -c1-40 | sed -e 's/-\{1,\}$//')
+  printf '%s' "$s"
+}
+
+# A configured ticketPrefix must itself be parseable back out of a normalised
+# reference (letter, then letters/digits, no dash). Reject anything else here
+# rather than silently minting references normalize() cannot round-trip. Exit 4,
+# not 2: an invalid ticketPrefix is a broken config, the same class of failure
+# as csw-config's and csw-gates's own malformed-config checks — not a bad
+# invocation of this command.
+validate_prefix() {
+  local p=$1
+  if [ -n "$p" ] && ! printf '%s' "$p" | grep -q '^[A-Za-z][A-Za-z0-9]*$'; then
+    die "invalid ticketPrefix in config: '$p' (must start with a letter, then letters or digits only)" 4
+  fi
+}
+
+normalize() {
+  local raw prefix letters digits tracker
+  raw=$(printf '%s' "${1-}" | tr -d '[:space:]')
+  # `#68` is how people write a GitHub issue. The marker carries no meaning
+  # beyond "this is an issue reference", so drop it and judge what is left.
+  raw=${raw#\#}
+  if [ -z "$raw" ]; then die "empty ticket reference" 2; fi
+
+  if printf '%s' "$raw" | grep -q '^[0-9][0-9]*$'; then
+    # `|| exit $?` for the same reason csw-config's `effective()` captures
+    # `config_path`'s exit status explicitly: `normalize` is itself sometimes
+    # invoked inside a command substitution (from `branch` and `number`
+    # below), and bash does not inherit `errexit` into that nested subshell
+    # without `shopt -s inherit_errexit`. Without this, a csw-config failure
+    # here would silently read as an empty prefix and fall through to the
+    # misleading "needs ticketPrefix" error instead of csw-config's own exit
+    # code (3 or 4).
+    prefix=$(config get ticketPrefix) || exit $?
+    validate_prefix "$prefix"
+    if [ -n "$prefix" ]; then
+      printf '%s-%s\n' "$prefix" "$raw"
+      return 0
+    fi
+    # No prefix configured. On GitHub the bare number IS the canonical
+    # reference — issues are numbered per repo, so there is nothing to
+    # disambiguate and demanding a ticketPrefix would make `tracker: github`
+    # undispatchable. Every other tracker keeps the strict rule: a bare number
+    # with no prefix genuinely does not identify anything.
+    tracker=$(config get tracker) || exit $?
+    if [ "$tracker" = "github" ]; then
+      printf '%s\n' "$raw"
+      return 0
+    fi
+    die "bare number '$raw' needs \"ticketPrefix\" in .claude/csw.json (or \"tracker\": \"github\")" 2
+  fi
+
+  # Dashed: a prefix (which may itself contain digits, e.g. a "K8S" team key)
+  # followed by exactly one separating dash and a run of digits. Split on the
+  # LAST dash so a digit-bearing prefix is not mistaken for a malformed
+  # multi-segment reference.
+  if printf '%s' "$raw" | grep -q '^[A-Za-z][A-Za-z0-9]*-[0-9][0-9]*$'; then
+    letters=${raw%-*}
+    digits=${raw##*-}
+    letters=$(printf '%s' "$letters" | tr '[:lower:]' '[:upper:]')
+    printf '%s-%s\n' "$letters" "$digits"
+    return 0
+  fi
+
+  # Undashed: only unambiguous when the prefix is pure alphabetic (tra1088 ->
+  # TRA-1088). An undashed alphanumeric prefix like K8S42 is genuinely
+  # ambiguous about where the prefix ends and the ticket number begins, so it
+  # falls through to the rejection below.
+  if printf '%s' "$raw" | grep -q '^[A-Za-z][A-Za-z]*[0-9][0-9]*$'; then
+    letters=$(printf '%s' "$raw" | sed -e 's/[0-9].*$//' | tr '[:lower:]' '[:upper:]')
+    digits=$(printf '%s' "$raw" | sed -e 's/^[A-Za-z]*//')
+    printf '%s-%s\n' "$letters" "$digits"
+    return 0
+  fi
+
+  die "not a ticket reference: ${1-}" 2
+}
+
+cmd=${1:-}
+case "$cmd" in
+  normalize)
+    if [ $# -ne 2 ]; then die "usage: csw-ticket normalize <ref>" 2; fi
+    normalize "$2"
+    ;;
+  number)
+    if [ $# -ne 2 ]; then die "usage: csw-ticket number <ref>" 2; fi
+    # Strip everything up to and including the LAST dash (not a leading
+    # `[A-Z]*-`), so a prefix containing digits (K8S-42) still yields 42
+    # instead of being left untouched.
+    #
+    # `|| exit $?` is not decorative: `normalize` itself calls `config get
+    # ticketPrefix` inside a command substitution, and this whole call is
+    # itself inside one (`normalized=$(normalize "$2")`). Bash does not
+    # inherit `errexit` into nested command-substitution subshells without
+    # `shopt -s inherit_errexit`, so a csw-config failure inside `normalize`
+    # would otherwise be silently swallowed here and fall through to the
+    # wrong error instead of propagating csw-config's real exit code (the
+    # same hazard `csw-config` documents for itself in `effective()`).
+    normalized=$(normalize "$2") || exit $?
+    printf '%s\n' "${normalized##*-}"
+    ;;
+  slug)
+    shift
+    if [ $# -eq 0 ]; then die "usage: csw-ticket slug <words...>" 2; fi
+    slug=$(slugify "$@")
+    if [ -z "$slug" ]; then die "title produced an empty slug" 2; fi
+    printf '%s\n' "$slug"
+    ;;
+  branch)
+    if [ $# -lt 4 ]; then die "usage: csw-ticket branch <type> <ref> <title...>" 2; fi
+    type=$2
+    # See the `number` subcommand above for why `|| exit $?` is required here:
+    # without it, a csw-config failure inside `normalize` is silently
+    # swallowed by the nested command substitution instead of propagating.
+    ticket=$(normalize "$3") || exit $?
+    shift 3
+    slug=$(slugify "$@")
+    if [ -z "$slug" ]; then die "title produced an empty slug" 2; fi
+    pattern=$(config get branchPattern)
+    # branchPattern is free text from a config file, unlike ticketPrefix's
+    # strict format. Left unvalidated, "wip" renders every ticket to the same
+    # branch, null renders literally to "null", and an object renders to
+    # `{"a":1}` — none of them a mistake anyone would notice until two
+    # /csw:batch tickets collide on one branch mid-unattended-night. Require
+    # at least one placeholder, and require the rendered result to actually
+    # be a legal git ref.
+    case "$pattern" in
+      *'<ticket>'*|*'<slug>'*) ;;
+      *) die "branchPattern must contain <ticket> or <slug>, so different tickets render to different branches: '$pattern'" 4 ;;
+    esac
+    lower=$(printf '%s' "$ticket" | tr '[:upper:]' '[:lower:]')
+    out=${pattern//<type>/$type}
+    out=${out//<ticket>/$lower}
+    out=${out//<slug>/$slug}
+    if ! git check-ref-format --branch "$out" >/dev/null 2>&1; then
+      die "branchPattern '$pattern' rendered '$out', which is not a legal git branch name" 4
+    fi
+    printf '%s\n' "$out"
+    ;;
+  ''|-h|--help)
+    usage
+    ;;
+  *)
+    die "unknown subcommand: $cmd" 2
+    ;;
+esac
