@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "csw",
   "displayName": "Claude Ship Workflow",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Ship a tracker ticket: dispatch it into a worktree, drive it to a pull request, merge it after review, and clean up after itself.",
   "author": {
     "name": "Mike Stankavich",

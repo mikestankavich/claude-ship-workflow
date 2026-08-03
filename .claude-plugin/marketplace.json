@@ -9,7 +9,7 @@
     {
       "name": "csw",
       "description": "Ship a tracker ticket: dispatch it into a worktree, drive it to a pull request, merge it after review, and clean up after itself.",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "source": "./",
       "author": {
         "name": "Mike Stankavich",
