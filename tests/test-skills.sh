@@ -122,4 +122,13 @@ assert_contains "$(cat "$cleanup")" "gh pr view --json state,mergedAt" "cleanup:
 assert_contains "$(cat "$cleanup")" "unknown, not absent" "cleanup: a failed sweep is reported distinctly from an empty one"
 assert_contains "$(cat "$cleanup")" "the command failing for any reason" "cleanup: any gh pr view failure is a stop, not just a non-merged state"
 
+# --- batch: never auto-invoked, always explains its skips ---
+batch="$SKILLS/batch/SKILL.md"
+assert_eq "$(fm_field "$batch" 'disable-model-invocation')" "true" "batch: never model-invoked"
+assert_contains "$(cat "$batch")" "csw-batch-filter" "batch: delegates selection"
+assert_contains "$(cat "$batch")" "csw:work" "batch: dispatches through the work skill"
+assert_contains "$(cat "$batch")" "--draft" "batch: blocked work becomes a draft PR"
+assert_contains "$(cat "$batch")" "Morning summary" "batch: reports a morning summary"
+assert_contains "$(cat "$batch")" "backfill" "batch: warns about the blocking-relation prerequisite"
+
 report
