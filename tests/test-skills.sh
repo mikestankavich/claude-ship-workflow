@@ -130,6 +130,15 @@ assert_contains "$(cat "$cleanup")" "git worktree prune" "cleanup: prunes stale 
 assert_contains "$(cat "$cleanup")" "on either path" "cleanup: pulls the base branch on both paths"
 assert_contains "$(cat "$cleanup")" "not only for the manual path" "cleanup: says the pull is not optional"
 assert_contains "$(cat "$cleanup")" "Always ask before closing" "cleanup: never closes a ticket unasked"
+# csw-sweep's `[gone]` arm reads `%(upstream:track)`, which only says `[gone]` once the
+# remote-tracking ref is missing locally — and a plain `git pull` does not prune, so a branch
+# deleted on the forge stays invisible to it. The sweep cannot fix this itself (it must never
+# fetch), so the prune has to happen here, before Step 4 runs.
+bare_pull=$(grep -nE '^[[:space:]]*git pull([[:space:]]|$)' "$cleanup" | grep -v -- '--prune' || true)
+assert_eq "$bare_pull" "" \
+  "cleanup: every runnable git pull prunes, so the sweep's [gone] arm reads fresh state"
+assert_contains "$(cat "$cleanup")" "only a prune" \
+  "cleanup: says why the prune is load-bearing, not cosmetic"
 assert_contains "$(cat "$cleanup")" "sibling" "cleanup: checks for sibling PRs in other repos"
 # The sibling search must be scoped to this repo's owner. Unscoped, `gh search prs` runs
 # across all of GitHub, and with `tracker: github` the ticket is a bare number — searching

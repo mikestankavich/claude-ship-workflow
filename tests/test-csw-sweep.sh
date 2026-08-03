@@ -83,6 +83,15 @@ clean=$(make_repo)
 assert_eq "$(cd "$clean" && "$BIN/csw-sweep" branches)" "" "clean repo has no branches to sweep"
 assert_contains "$(cd "$clean" && "$BIN/csw-sweep")" "nothing to sweep" "clean repo reports nothing to sweep"
 assert_status 0 "clean sweep exits 0" -- in_dir "$clean" "$BIN/csw-sweep"
+# ...and says nothing about prunes. No branch here tracks anything, so the
+# `[gone]` arm has nothing it could be stale about; a caveat that fires on every
+# clean sweep is noise that trains the reader to skip the note line.
+case "$(cd "$clean" && "$BIN/csw-sweep")" in
+  *prune*)
+    assert_eq "prune-note-without-tracking-branches" "no-note" \
+      "a repo with no tracking branches produces no prune caveat" ;;
+  *) PASSES=$((PASSES + 1)) ;;
+esac
 
 # A `.` in the BASE branch name must not act as a regex wildcard and swallow an
 # unrelated merged branch: `release/1.x` as a BRE pattern also matches
@@ -388,6 +397,99 @@ else
         "a base level with its upstream produces no staleness note" ;;
     *) PASSES=$((PASSES + 1)) ;;
   esac
+fi
+
+# --- `[gone]` detection depends on a prune, and the report says so ------------
+#
+# `%(upstream:track)` reports `[gone]` only once the remote-tracking ref is
+# missing *locally*, which is a statement about `refs/remotes`, not about the
+# server. Deleting a branch on the forge -- what `gh pr merge --delete-branch`
+# does -- leaves `refs/remotes/origin/<name>` sitting on disk until something
+# prunes, and a plain `git fetch`/`git pull` does not prune. These tests pin
+# that dependency rather than leaving it implicit, so the day someone drops the
+# `--prune` from csw:cleanup the sweep does not go quietly half-blind.
+#
+# make_gone_clone prints the path of a clone whose `feat/deleted-upstream`
+# tracks an origin branch that has since been deleted on the origin. That branch
+# is an ancestor of neither the local base nor its upstream -- it shipped the way
+# a squash-merge ships -- so `merged_into` cannot rescue it and `[gone]` is its
+# only route into the sweep.
+make_gone_clone() {
+  local origin parent clone
+  origin=$(make_repo)
+  (
+    cd "$origin" || exit 1
+    git checkout -q -b feat/deleted-upstream
+    printf 'g\n' >g.txt
+    git add -A && git commit -qm "work that shipped by squash-merge"
+    git checkout -q main
+  ) || return 1
+  parent=$(mktemp -d)
+  TMPDIRS+=("$parent")
+  clone="$parent/work"
+  git clone -q "$origin" "$clone" || return 1
+  write_config "$clone" <<'JSON'
+{ "baseBranch": "main", "worktreeDir": ".claude/worktrees" }
+JSON
+  (
+    cd "$clone" || exit 1
+    git config user.email test@example.com
+    git config user.name "CSW Test"
+    git config commit.gpgsign false
+    git branch -q --track feat/deleted-upstream origin/feat/deleted-upstream
+  ) || return 1
+  # The forge-side delete. Deliberately NOT `git push origin --delete` from the
+  # clone: that removes the clone's own remote-tracking ref as a side effect and
+  # would hand the test the pruned state it exists to prove is absent.
+  git -C "$origin" branch -q -D feat/deleted-upstream || return 1
+  printf '%s\n' "$clone"
+}
+
+gonerepo=$(make_gone_clone) || gonerepo=""
+if [ -z "$gonerepo" ]; then
+  FAILURES=$((FAILURES + 1))
+  printf 'FAIL could not build the deleted-upstream fixture\n' >&2
+else
+  # A plain fetch -- exactly what `git pull` does -- leaves the stale
+  # remote-tracking ref in place, so the branch is invisible to the sweep.
+  git -C "$gonerepo" fetch -q origin
+  unpruned=$(cd "$gonerepo" && "$BIN/csw-sweep" branches)
+  case "$unpruned" in
+    *feat/deleted-upstream*)
+      assert_eq "swept-without-prune" "not-swept" \
+        "without a prune the [gone] arm cannot see a branch deleted on the remote" ;;
+    *) PASSES=$((PASSES + 1)) ;;
+  esac
+
+  # ...which makes `nothing to sweep` an answer the reader cannot trust. Say so.
+  unpruned_report=$(cd "$gonerepo" && "$BIN/csw-sweep")
+  assert_contains "$unpruned_report" "nothing to sweep" \
+    "the unpruned sweep finds nothing, which is the whole hazard"
+  assert_contains "$unpruned_report" "only as fresh as the last prune" \
+    "the report warns that upstream-gone detection depends on a prune"
+  assert_contains "$unpruned_report" "git fetch --prune" \
+    "the prune caveat names the command that refreshes it"
+
+  # After the prune the same branch reports, via the `[gone]` arm alone.
+  git -C "$gonerepo" fetch -q --prune origin
+  assert_contains "$(cd "$gonerepo" && "$BIN/csw-sweep" branches)" "feat/deleted-upstream" \
+    "after a prune the [gone] arm sweeps the branch deleted on the remote"
+
+  # ...and the caveat retires with it: no branch is left whose absence from the
+  # report a prune could still explain.
+  pruned_report=$(cd "$gonerepo" && "$BIN/csw-sweep")
+  case "$pruned_report" in
+    *"last prune"*)
+      assert_eq "prune-note-after-prune" "no-note" \
+        "once every tracking branch is [gone] or reported, the prune caveat retires" ;;
+    *) PASSES=$((PASSES + 1)) ;;
+  esac
+
+  # Still read-only: emitting the caveat must not tempt the sweep into fetching.
+  gone_before=$(cd "$gonerepo" && git for-each-ref --format='%(refname) %(objectname)' | sort)
+  (cd "$gonerepo" && "$BIN/csw-sweep" >/dev/null)
+  gone_after=$(cd "$gonerepo" && git for-each-ref --format='%(refname) %(objectname)' | sort)
+  assert_eq "$gone_after" "$gone_before" "the sweep still moves no ref while reporting the prune caveat"
 fi
 
 report
