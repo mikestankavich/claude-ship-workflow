@@ -15,6 +15,11 @@ fi
 for phrase in "not yours" "unmaintained" "/csw:work" "/csw:merge" "/csw:cleanup" "/csw:batch"; do
   assert_contains "$(cat "$readme")" "$phrase" "README mentions $phrase"
 done
+# A batch's isolation is per ticket in both senses — its own worktree and its own context —
+# and the second one is the part a reader cannot infer from "one PR each".
+assert_contains "$(cat "$readme")" "its own context" \
+  "README says a batch isolates each ticket's context, not only its worktree"
+
 for gone in "/csw:spec" "/csw:plan" "/csw:build" "/csw:ship"; do
   if grep -q -- "$gone" "$readme"; then
     FAILURES=$((FAILURES + 1)); printf 'FAIL README still advertises %s\n' "$gone" >&2

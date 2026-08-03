@@ -262,6 +262,48 @@ assert_contains "$(cat "$batch")" "the ticket reference and nothing else" \
   "batch: dispatches csw:work with no modifier, so no ticket can stop for answers"
 assert_contains "$(cat "$batch")" "A failed selection is never an empty selection" \
   "batch: a filter failure is reported distinctly from an empty batch"
+
+# --- batch: one fresh subagent per ticket ---
+#
+# The loop used to run every csw:work dispatch in the controlling session, so ticket two
+# inherited ticket one's plan, its diff and its dead ends. Worktrees were isolated; the mind
+# driving them was not. Each ticket now gets a subagent, which is the programmatic equivalent
+# of clearing context between dispatches.
+assert_contains "$(cat "$batch")" "fresh subagent" \
+  "batch: each ticket is dispatched to a subagent of its own"
+assert_contains "$(cat "$batch")" "Never run \`csw:work\` in this session" \
+  "batch: the controlling session never does a ticket's work itself"
+# A fork inherits the whole parent conversation, which is precisely the flaw being fixed —
+# it would look like a subagent and contaminate exactly as badly.
+assert_contains "$(cat "$batch")" "Not a fork" \
+  "batch: says why a fork is not the isolation being asked for"
+# csw:work Step 4 creates the worktree on a branch csw-ticket derives from the ticket. A
+# subagent handed worktree isolation is already in one and cannot create that branch.
+assert_contains "$(cat "$batch")" "no worktree isolation" \
+  "batch: the dispatch leaves the worktree to csw:work rather than pre-isolating the subagent"
+assert_contains "$(cat "$batch")" "creates the worktree itself" \
+  "batch: names which step owns the worktree, so the dispatch does not duplicate it"
+# The controller assembles the morning summary out of returned rows. If a subagent hands back
+# prose, the summary is reconstructed from a transcript again — the thing this change removes.
+assert_contains "$(cat "$batch")" "report contract" \
+  "batch: each subagent returns a structured result, not a narrative"
+assert_contains "$(cat "$batch")" "one row in the summary, not the end of the night" \
+  "batch: one failed ticket does not stop the loop"
+# Skill reachability is the one thing that makes this dispatch shape work at all: csw:work
+# sets no disable-model-invocation, so a subagent can invoke it through the Skill tool.
+# Matched on the sentence rather than the bare field name, which batch's own frontmatter
+# already carries and which would therefore pass without the explanation being written.
+assert_contains "$(cat "$batch")" "sets no \`disable-model-invocation\`" \
+  "batch: records why csw:work is reachable from inside a subagent"
+# The summary is now assembled from the rows Step 5 collected, not recovered from the night's
+# transcript. Saying so in Step 7 is what stops the controller reaching for a transcript it
+# deliberately no longer has.
+batch_summary=$(sed -n '/^## Step 7/,/^## Red flags/p' "$batch")
+assert_contains "$batch_summary" "rows Step 5 collected" \
+  "batch: the morning summary is assembled from returned rows, not from a transcript"
+batch_red_flags=$(sed -n '/^## Red flags/,$p' "$batch")
+assert_contains "$batch_red_flags" "subagent" \
+  "batch: red flags catch a dispatch run in the controlling session"
 assert_contains "$(cat "$batch")" "can only lower tonight's cap, never raise it" \
   "batch: the cap override is documented as lower-only"
 assert_contains "$(cat "$batch")" "csw-config get batch.maxTickets" \

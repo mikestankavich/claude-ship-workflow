@@ -48,8 +48,10 @@ something reported unprompted. Branch cleanup never asks. Closing a ticket alway
 ```
 
 Pulls Todo tickets, excludes what cannot safely run tonight, and dispatches the rest — one
-worktree and one PR each — then leaves a morning summary. Three filters, because one is not
-enough:
+worktree and one PR each — then leaves a morning summary. Every ticket runs in a subagent of
+its own, so it gets its own context as well as its own worktree: nothing ticket one planned,
+tried, or abandoned is still in the room when ticket two starts. Three filters, because one is
+not enough:
 
 - **Blocked tickets**, which only works if your tracker actually records blocking relations.
 - **Contended global resources.** Two migration-adding tickets each write the next number in
