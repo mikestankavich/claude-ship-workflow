@@ -2743,6 +2743,64 @@ assert_eq "$out_ids" "$in_ids" "every ticket appears across selected+skipped, sa
 dupe_count=$(printf '%s' "$out" | jq '(.selected + [.skipped[].id]) | (length - (unique | length))')
 assert_eq "$dupe_count" "0" "no ticket appears in both selected and skipped"
 
+# --- Fix round 2: per-field type validation instead of crashing or silently ---
+# --- misreading a malformed field. ---
+
+# String priority previously tracebacked with a TypeError on the sort comparison.
+t='[{"id":"S-1","state":"Todo","priority":"high"},{"id":"S-2","state":"Todo","priority":2}]'
+assert_eq "$(status_of "$t")" "2" "string priority exits 2"
+err=$(stderr_of "$t")
+assert_contains "$err" "S-1" "string priority error names the ticket id"
+assert_contains "$err" "priority" "string priority error names the field"
+assert_no_traceback "$err" "string priority must not traceback"
+
+# Float priority is rejected too — priority must be an integer.
+t='[{"id":"FL-1","state":"Todo","priority":2.5}]'
+assert_eq "$(status_of "$t")" "2" "float priority exits 2"
+assert_contains "$(stderr_of "$t")" "FL-1" "float priority error names the ticket id"
+
+# Boolean priority is rejected — bool is an int subclass in Python and must not
+# slip through a bare isinstance(x, int) check.
+t='[{"id":"BP-1","state":"Todo","priority":true}]'
+assert_eq "$(status_of "$t")" "2" "boolean priority exits 2"
+assert_contains "$(stderr_of "$t")" "BP-1" "boolean priority error names the ticket id"
+
+# Non-string state is rejected.
+t='[{"id":"ST-1","state":5,"priority":1}]'
+assert_eq "$(status_of "$t")" "2" "non-string state exits 2"
+err=$(stderr_of "$t")
+assert_contains "$err" "ST-1" "non-string state error names the ticket id"
+assert_contains "$err" "state" "non-string state error names the field"
+
+# String labels previously let `"migration" in "has-migrationXYZ-in-it"` fall
+# through as True, silently claiming a single-writer slot it never earned.
+t='[{"id":"L-1","state":"Todo","priority":1,"labels":"has-migrationXYZ-in-it"}]'
+assert_eq "$(status_of "$t")" "2" "string labels exits 2"
+err=$(stderr_of "$t")
+assert_contains "$err" "L-1" "string labels error names the ticket id"
+assert_contains "$err" "labels" "string labels error names the field"
+assert_no_traceback "$err" "string labels must not traceback"
+
+# String relatedTo previously iterated per character, colliding a ticket id
+# ("9") with one character of the string ("R-9") into a spurious cluster.
+t='[{"id":"9","state":"Todo","priority":1},{"id":"R-1","state":"Todo","priority":2,"relatedTo":"R-9"}]'
+assert_eq "$(status_of "$t")" "2" "string relatedTo exits 2"
+err=$(stderr_of "$t")
+assert_contains "$err" "R-1" "string relatedTo error names the ticket id"
+assert_contains "$err" "relatedTo" "string relatedTo error names the field"
+
+# String blockedBy previously garbled the skip reason via ", ".join over characters.
+t='[{"id":"K-1","state":"Todo","priority":1,"blockedBy":"K-9"}]'
+assert_eq "$(status_of "$t")" "2" "string blockedBy exits 2"
+err=$(stderr_of "$t")
+assert_contains "$err" "K-1" "string blockedBy error names the ticket id"
+assert_contains "$err" "blockedBy" "string blockedBy error names the field"
+
+# A non-string element inside an otherwise-list field is rejected too.
+t='[{"id":"LX-1","state":"Todo","priority":1,"labels":["ok",7]}]'
+assert_eq "$(status_of "$t")" "2" "non-string element inside labels exits 2"
+assert_contains "$(stderr_of "$t")" "LX-1" "non-string list element error names the ticket id"
+
 report
 ```
 
@@ -2843,6 +2901,28 @@ def load_tickets():
         if tid in seen_ids:
             die("duplicate ticket id: %s" % tid)
         seen_ids.add(tid)
+
+        priority = t.get("priority")
+        # bool is an int subclass in Python, so it must be excluded explicitly or
+        # `{"priority": true}` would silently pass an isinstance(x, int) check.
+        if priority is not None and (isinstance(priority, bool) or not isinstance(priority, int)):
+            die("ticket %s has an invalid \"priority\" (must be an integer, absent, or null), "
+                "got %s" % (tid, describe_type(priority)))
+
+        state = t.get("state")
+        if state is not None and not isinstance(state, str):
+            die("ticket %s has an invalid \"state\" (must be a string, absent, or null), "
+                "got %s" % (tid, describe_type(state)))
+
+        # A bare string here (e.g. relatedTo: "R-9") must not be silently iterated
+        # character-by-character — that produces a spurious cluster or label match.
+        for field in ("labels", "blockedBy", "relatedTo"):
+            value = t.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                die("ticket %s has an invalid \"%s\" (must be a list of strings, absent, "
+                    "or null), got %s" % (tid, field, describe_type(value)))
     return tickets
 
 
@@ -2941,6 +3021,14 @@ def main():
     for t in admitted[max_tickets:]:
         skipped.append({"id": t["id"], "reason": "batch cap (%d)" % max_tickets})
 
+    # This runs unattended overnight, so it must catch its own bugs rather than
+    # ship a silently wrong batch: every input ticket must appear in exactly one
+    # of selected/skipped, never zero and never both.
+    out_ids = [t["id"] for t in selected] + [s["id"] for s in skipped]
+    if set(out_ids) != {t["id"] for t in tickets} or len(out_ids) != len(set(out_ids)):
+        die("internal error: filter dropped or duplicated a ticket "
+            "(selected=%d skipped=%d input=%d)" % (len(selected), len(skipped), len(tickets)))
+
     json.dump({"selected": [t["id"] for t in selected], "skipped": skipped},
               sys.stdout, indent=2)
     sys.stdout.write("\n")
@@ -2957,7 +3045,7 @@ chmod +x bin/csw-batch-filter
 bash tests/test-csw-batch-filter.sh
 ```
 
-Expected: PASS — `40 passed, 0 failed`.
+Expected: PASS — `63 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 
