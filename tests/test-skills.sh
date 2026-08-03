@@ -143,6 +143,48 @@ assert_contains "$work_red_flags" "modifier" \
 assert_contains "$work_red_flags" "interactive" \
   "work: red flags deny that interactive relaxes the hard stop"
 
+# --- prep: specs a ticket, touches nothing ---
+prep="$SKILLS/prep/SKILL.md"
+assert_contains "$(cat "$prep")" "csw-ticket normalize" "prep: normalises the ticket reference"
+assert_contains "$(cat "$prep")" "superpowers:brainstorming" "prep: brainstorms the ticket"
+# Brainstorming's default mode designs the implementation. Prep wants the questions instead —
+# the design belongs to the dispatch that has a worktree to try it in.
+assert_contains "$(cat "$prep")" "surface-the-questions" \
+  "prep: brainstorms for the questions rather than for a design"
+
+# The marker is the whole interface between prep and the dispatch that reads it back. If it
+# drifts, prep still writes a comment and csw:work still finds nothing.
+assert_contains "$(cat "$prep")" '**CSW prep**' "prep: writes the stable marker"
+assert_contains "$(cat "$prep")" "One comment" "prep: leaves exactly one comment, not a thread"
+
+# The three things the comment has to carry. A comment with only a spec is a summary of the
+# ticket, which the ticket already is.
+assert_contains "$(cat "$prep")" "open questions" "prep: the comment carries the open questions"
+assert_contains "$(cat "$prep")" "the codebase contradicts" \
+  "prep: the comment carries what the ticket asserts and the code denies"
+
+# Zero side effects is the property that makes prep free to run before anything is decided,
+# and it is enumerated rather than implied for the same reason batch's dry run enumerates it.
+assert_contains "$(cat "$prep")" \
+  "No worktree, no branch, no pull request, no validation run" \
+  "prep: its no-side-effects property is enumerated, not implied"
+# Todo is self-selecting for the batch loop. Claiming the ticket the way csw:work does would
+# quietly remove every prepped ticket from the column prep exists to improve.
+assert_contains "$(cat "$prep")" "stays in Todo" \
+  "prep: leaves the ticket in Todo so the batch loop still picks it up"
+assert_contains "$(cat "$prep")" "Do not claim it" \
+  "prep: says not to claim the ticket, since reading it is where csw:work claims it"
+
+# Prose has to be able to *name* the things prep must not do, so these match runnable
+# invocations at the start of a line rather than any mention of the word.
+prep_writes=$(grep -nE '^[[:space:]]*(gh pr create|gh pr merge|git worktree|git commit|git push|git checkout|git switch|git branch)' "$prep" || true)
+assert_eq "$prep_writes" "" "prep: contains no runnable command that touches the repo"
+prep_flags=$(fm_field "$prep" 'argument-hint')
+assert_contains "$prep_flags" "ticket" "prep: takes a ticket reference"
+prep_red_flags=$(sed -n '/^## Red flags/,$p' "$prep")
+assert_contains "$prep_red_flags" "worktree" \
+  "prep: red flags catch a prep run that starts doing the work"
+
 # --- merge: never squash, always check CI, always chain into cleanup ---
 merge="$SKILLS/merge/SKILL.md"
 assert_contains "$(cat "$merge")" "gh pr checks" "merge: checks CI"
