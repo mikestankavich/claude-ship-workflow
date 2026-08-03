@@ -11,12 +11,38 @@ on stdout. Three filters, in this order, because each one depends on the last:
   3. Single-writer labels (migrations, by default) admit one ticket per batch.
      Two agents each writing "the next migration number" both validate against
      main and one still has to be redone rather than rebased.
+
+All input — stdin and config alike — is untrusted. Bad input is a clean, single-line
+"csw-batch-filter: <message>" on stderr and exit 2, matching the four shell tools in
+this directory. A Python traceback is never an acceptable user-facing error.
 """
 
 import json
 import os
 import subprocess
 import sys
+
+
+def die(message):
+    sys.stderr.write("csw-batch-filter: %s\n" % message)
+    sys.exit(2)
+
+
+def describe_type(value):
+    """A JSON-flavored type name for error messages, not a Python one."""
+    if isinstance(value, bool):
+        return "boolean"
+    if value is None:
+        return "null"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, (int, float)):
+        return "number"
+    return type(value).__name__
 
 
 def load_config():
@@ -30,6 +56,33 @@ def load_config():
         sys.stderr.write("csw-batch-filter: %s" % proc.stderr)
         sys.exit(proc.returncode)
     return json.loads(proc.stdout)
+
+
+def load_tickets():
+    """Read, parse, and validate the ticket array from stdin. Never raises past here —
+    every malformed shape exits 2 with a message naming what was expected and what
+    arrived, rather than an uncaught exception."""
+    raw = sys.stdin.read()
+    if not raw.strip():
+        die("no input on stdin (expected a JSON array of tickets, got nothing)")
+    try:
+        tickets = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        die("malformed JSON on stdin: %s" % exc)
+    if not isinstance(tickets, list):
+        die("expected a JSON array of tickets on stdin, got a top-level %s"
+            % describe_type(tickets))
+    seen_ids = set()
+    for i, t in enumerate(tickets):
+        if not isinstance(t, dict):
+            die("ticket at index %d must be a JSON object, got %s" % (i, describe_type(t)))
+        tid = t.get("id")
+        if not isinstance(tid, str) or tid == "":
+            die("ticket at index %d has no valid \"id\" (must be a non-empty string)" % i)
+        if tid in seen_ids:
+            die("duplicate ticket id: %s" % tid)
+        seen_ids.add(tid)
+    return tickets
 
 
 def rank(ticket, tracker):
@@ -49,7 +102,13 @@ def main():
     max_tickets = batch.get("maxTickets", 3)
     single_writer = batch.get("singleWriterLabels") or []
 
-    tickets = json.load(sys.stdin)
+    if not isinstance(max_tickets, int) or isinstance(max_tickets, bool) or max_tickets < 0:
+        die("batch.maxTickets must be an integer >= 0, got %s" % json.dumps(max_tickets))
+    if not isinstance(single_writer, list) or not all(isinstance(l, str) for l in single_writer):
+        die("batch.singleWriterLabels must be a list of strings, got %s"
+            % json.dumps(single_writer))
+
+    tickets = load_tickets()
     skipped = []
     candidates = []
 
