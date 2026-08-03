@@ -53,6 +53,17 @@ loop. Anything that does not reach merge-ready is left as a **draft** PR with a 
 the ticket, so preview automation filters it out and the morning review only sees PRs that
 are genuinely asking to be merged.
 
+```
+/csw:batch --dry-run
+```
+
+Runs the selection and stops — no dispatch, no worktrees, no branches, no PRs, no ticket
+state changes. It prints what would dispatch, what fell **below the cap**, and what was
+**excluded** and why. Those last two are reported apart on purpose: "would have run with a
+bigger cap" is an argument about the cap, and "blocked by ENG-1088" is an argument about the
+ticket. Pass a lower cap alongside it — `/csw:batch 2 --dry-run` — to see where a smaller
+night would cut.
+
 ## Install
 
 ```
@@ -93,6 +104,7 @@ A different project is a config file, not a fork. Full reference:
 | `/csw:merge` | Merge | Usually natural language: "go for merge" |
 | `/csw:cleanup` | Cleanup | Usually automatic, chained from merge |
 | `/csw:batch` | Nightly loop | Command only — never inferred |
+| `/csw:batch --dry-run` | Nightly loop | Selection only, no side effects |
 
 ## What happened to v0.x
 

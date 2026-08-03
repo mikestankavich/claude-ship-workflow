@@ -18,6 +18,8 @@ cd "$repo" || exit 1
 
 run() { printf '%s' "$1" | "$BIN/csw-batch-filter"; }
 selected() { run "$1" | jq -c '.selected'; }
+below_cap() { run "$1" | jq -c '.belowCap'; }
+skipped_ids() { run "$1" | jq -c '[.skipped[].id]'; }
 reason_for() { run "$1" | jq -r --arg id "$2" '.skipped[] | select(.id == $id) | .reason'; }
 
 # Blocked tickets are excluded.
@@ -69,7 +71,8 @@ t='[
 ]'
 assert_eq "$(selected "$t")" '["F-2"]' "direct relation clusters two candidates"
 
-# The cap is the last filter applied, and it explains itself.
+# The cap is the last cut applied, and it is not an exclusion: what it leaves out is
+# reported in belowCap, not skipped.
 t='[
   {"id":"G-1","state":"Todo","priority":1},
   {"id":"G-2","state":"Todo","priority":1},
@@ -77,7 +80,8 @@ t='[
   {"id":"G-4","state":"Todo","priority":3}
 ]'
 assert_eq "$(selected "$t")" '["G-1","G-2","G-3"]' "batch cap of 3"
-assert_contains "$(reason_for "$t" G-4)" "batch cap" "cap reason is explicit"
+assert_eq "$(below_cap "$t")" '["G-4"]' "the ticket over the cap lands in belowCap"
+assert_eq "$(skipped_ids "$t")" '[]' "the ticket over the cap is not skipped"
 
 # Empty input is valid.
 assert_eq "$(selected '[]')" '[]' "empty input selects nothing"
@@ -147,15 +151,16 @@ t='[{"id":"NEG-1","state":"Todo","priority":1}]'
 assert_eq "$(status_of "$t")" "2" "negative maxTickets exits 2"
 assert_contains "$(stderr_of "$t")" "maxTickets" "negative maxTickets error names the key"
 
-# maxTickets: 0 is valid and meaningful — it selects nothing, and every candidate is
-# skipped with the batch-cap reason.
+# maxTickets: 0 is valid and meaningful — it selects nothing, and every candidate falls
+# below the cap. None of them was excluded, so none of them is skipped.
 write_config "$repo" <<'JSON'
 { "tracker": "linear", "batch": { "maxTickets": 0, "singleWriterLabels": ["migration"] } }
 JSON
 t='[{"id":"Z-1","state":"Todo","priority":1},{"id":"Z-2","state":"Todo","priority":2}]'
 assert_eq "$(selected "$t")" '[]' "maxTickets 0 selects nothing"
-assert_contains "$(reason_for "$t" Z-1)" "batch cap" "maxTickets 0 skips the first with the cap reason"
-assert_contains "$(reason_for "$t" Z-2)" "batch cap" "maxTickets 0 skips the second with the cap reason"
+assert_eq "$(below_cap "$t")" '["Z-1","Z-2"]' \
+  "maxTickets 0 puts every candidate below the cap, in dispatch order"
+assert_eq "$(skipped_ids "$t")" '[]' "maxTickets 0 skips nothing"
 
 # Non-list singleWriterLabels: exit 2, names the key.
 write_config "$repo" <<'JSON'
@@ -174,7 +179,8 @@ write_config "$repo" <<'JSON'
 JSON
 
 # The invariant every filter above depends on: every input ticket appears exactly
-# once across selected plus skipped. This is a permanent guard, not just a probe.
+# once across selected plus belowCap plus skipped. This is a permanent guard, not
+# just a probe.
 t='[
   {"id":"INV-1","state":"Todo","priority":1,"labels":["migration"]},
   {"id":"INV-2","state":"Todo","priority":2,"labels":["migration"]},
@@ -186,10 +192,11 @@ t='[
 ]'
 out=$(run "$t")
 in_ids=$(printf '%s' "$t" | jq -c '[.[].id] | sort')
-out_ids=$(printf '%s' "$out" | jq -c '(.selected + [.skipped[].id]) | sort')
-assert_eq "$out_ids" "$in_ids" "every ticket appears across selected+skipped, same set as the input"
-dupe_count=$(printf '%s' "$out" | jq '(.selected + [.skipped[].id]) | (length - (unique | length))')
-assert_eq "$dupe_count" "0" "no ticket appears in both selected and skipped"
+out_ids=$(printf '%s' "$out" | jq -c '(.selected + .belowCap + [.skipped[].id]) | sort')
+assert_eq "$out_ids" "$in_ids" \
+  "every ticket appears across selected+belowCap+skipped, same set as the input"
+dupe_count=$(printf '%s' "$out" | jq '(.selected + .belowCap + [.skipped[].id]) | (length - (unique | length))')
+assert_eq "$dupe_count" "0" "no ticket appears in more than one of the three groups"
 
 # --- Fix round 2: per-field type validation instead of crashing or silently ---
 # --- misreading a malformed field. ---
@@ -248,5 +255,45 @@ assert_contains "$err" "blockedBy" "string blockedBy error names the field"
 t='[{"id":"LX-1","state":"Todo","priority":1,"labels":["ok",7]}]'
 assert_eq "$(status_of "$t")" "2" "non-string element inside labels exits 2"
 assert_contains "$(stderr_of "$t")" "LX-1" "non-string list element error names the ticket id"
+
+# --- Cap overflow is reported separately from genuine exclusions ---
+
+# belowCap carries everything that passed every filter and still fell outside the cap, in
+# the order it would have been dispatched. That is the difference between "must not run
+# tonight" and "would have run with a bigger cap", which nothing downstream could tell
+# apart while both shared one `skipped` array.
+t='[
+  {"id":"CAP-1","state":"Todo","priority":4},
+  {"id":"CAP-2","state":"Todo","priority":1},
+  {"id":"CAP-3","state":"Todo","priority":3},
+  {"id":"CAP-4","state":"Todo","priority":2},
+  {"id":"CAP-5","state":"Todo","priority":3,"blockedBy":["CAP-9"]}
+]'
+assert_eq "$(selected "$t")" '["CAP-2","CAP-4","CAP-3"]' "the cap keeps the top three, in priority order"
+assert_eq "$(below_cap "$t")" '["CAP-1"]' "belowCap carries the overflow in dispatch order"
+assert_eq "$(skipped_ids "$t")" '["CAP-5"]' "skipped carries only the genuine exclusion"
+assert_contains "$(reason_for "$t" CAP-5)" "blocked by CAP-9" "the genuine exclusion keeps its reason"
+
+# No skip reason blames the cap any more. A reader scanning `skipped` has to be able to
+# trust that every entry there is a real exclusion.
+assert_eq "$(run "$t" | jq '[.skipped[] | select(.reason | test("cap"))] | length')" "0" \
+  "no skipped entry blames the cap"
+
+# belowCap is always present, so a consumer never has to tell "absent" from "empty".
+assert_eq "$(below_cap '[{"id":"UN-1","state":"Todo","priority":1}]')" '[]' \
+  "belowCap is an empty array when nothing overflows"
+assert_eq "$(below_cap '[]')" '[]' "belowCap is an empty array for empty input"
+
+# belowCap is strictly the cap's overflow: a ticket a filter genuinely rejected never
+# appears there, however far down the priority order it sits.
+t='[
+  {"id":"BC-1","state":"Todo","priority":1,"labels":["migration"]},
+  {"id":"BC-2","state":"Todo","priority":2,"labels":["migration"]},
+  {"id":"BC-3","state":"In Progress","priority":1},
+  {"id":"BC-4","state":"Todo","priority":3,"blockedBy":["BC-9"]}
+]'
+assert_eq "$(below_cap "$t")" '[]' "genuine exclusions never land in belowCap"
+assert_eq "$(run "$t" | jq -c '[.skipped[].id] | sort')" '["BC-2","BC-3","BC-4"]' \
+  "every genuine exclusion is still reported, with its reason"
 
 report

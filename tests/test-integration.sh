@@ -80,7 +80,10 @@ assert_contains "$(reason A-4)" "cluster" "cluster filter fires"
 assert_contains "$(reason A-4)" "A-3" "cluster reason names the winner it lost to"
 assert_contains "$(reason A-6)" "single-writer" "single-writer filter fires"
 assert_contains "$(reason A-6)" "A-5" "single-writer reason names the holder"
-assert_contains "$(reason A-7)" "batch cap" "cap filter fires"
+assert_eq "$(printf '%s' "$batch_out" | jq -c '.belowCap')" '["A-7"]' \
+  "the ticket over the example config's cap is reported below the cap, not skipped"
+assert_eq "$(printf '%s' "$batch_out" | jq -c '[.skipped[].id] | sort')" '["A-1","A-4","A-6"]' \
+  "skipped carries only the three genuine exclusions"
 
 # --- Cross-tool flow: derive a branch name, create and merge it, and confirm ---
 # --- the sweep reports it. ---
