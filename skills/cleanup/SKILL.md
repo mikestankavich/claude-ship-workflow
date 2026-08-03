@@ -231,14 +231,38 @@ behind its remote, is exactly the state that silently backdates the next branch 
 Report the ticket's current state. If the PR body said `Closes <TICKET>`, the tracker may
 have moved it already — check rather than assume.
 
-Then look for siblings before declaring it done:
+Then look for siblings before declaring it done. **Scope the search to this repo's owner.**
+`gh search prs` with no scope searches all of GitHub, which is almost never what this step
+wants:
 
 ```bash
-gh search prs "<TICKET>" --state open --json repository,number,title,url
+owner=$(gh repo view --json owner --jq .owner.login)
+gh search prs "<TICKET>" --owner "$owner" --state open --json repository,number,title,url
 ```
 
-A platform ticket is not done while its docs counterpart is still open. Report any sibling
-PRs you find.
+With `tracker: linear` the ticket is a distinctive string like `ENG-123`, and even that query
+wants the scope. With `tracker: github` it is a **bare number**, which matches every PR whose
+title happens to contain those digits — version bumps, unrelated issue numbers, strangers'
+repos. Run unscoped for `81` and you get thirty PRs from thirty projects, none of them
+siblings.
+
+Scoping is the floor, not the whole answer. For a numeric ticket, also search what the work
+was actually *about*, and search the `#<TICKET>` form against titles and bodies rather than the
+bare digits:
+
+```bash
+gh search prs "<a distinctive phrase from the ticket title>" --owner "$owner" --state open --json repository,number,title,url
+gh search prs "#<TICKET>" --owner "$owner" --match title,body --state open --json repository,number,title,url
+```
+
+**A long result list is a symptom, not a finding.** A couple of candidates is an answer worth
+reading; thirty means the query was too broad. Narrow it and run it again — do not paste the
+list into the report. This step exists so that one genuine cross-repo sibling gets noticed, and
+burying it in thirty false positives is indistinguishable from missing it.
+
+A platform ticket is not done while its docs counterpart is still open. Report the siblings you
+find — and when the scoped search comes back empty, report that too. `[]` is the answer this
+step is usually looking for, and saying so is what shows it ran.
 
 **Always ask before closing a ticket.** Even when everything is merged, even when the sweep
 is clean, even when it is obvious. Propose it, name what you would set it to, and wait.
@@ -262,3 +286,5 @@ is clean, even when it is obvious. Propose it, name what you would set it to, an
 | "`git branch -d` refused, I'll use -D" | Refusal means unmerged commits. Investigate. |
 | "Uncommitted changes in the worktree are just scratch" | Show them first. That call is not yours. |
 | "One repo's PR is merged, so the ticket is done" | Check for siblings in other repos. |
+| "The sibling search returned thirty open PRs" | That is an unscoped query, not thirty siblings. Add `--owner` and run it again. |
+| "The ticket number is enough of a query on its own" | Not for a `github` ticket. Scope it with `--owner`, then search the title too. |

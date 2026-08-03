@@ -131,6 +131,21 @@ assert_contains "$(cat "$cleanup")" "on either path" "cleanup: pulls the base br
 assert_contains "$(cat "$cleanup")" "not only for the manual path" "cleanup: says the pull is not optional"
 assert_contains "$(cat "$cleanup")" "Always ask before closing" "cleanup: never closes a ticket unasked"
 assert_contains "$(cat "$cleanup")" "sibling" "cleanup: checks for sibling PRs in other repos"
+# The sibling search must be scoped to this repo's owner. Unscoped, `gh search prs` runs
+# across all of GitHub, and with `tracker: github` the ticket is a bare number — searching
+# for 81 returned 30 strangers' PRs and not one sibling.
+assert_contains "$(cat "$cleanup")" "gh repo view --json owner" \
+  "cleanup: derives the owner to scope the sibling search to"
+# Matched at the start of a line so the skill can still *name* the unscoped form in prose to
+# warn against it; what must not exist is a runnable invocation missing --owner.
+unscoped=$(grep -E '^[[:space:]]*gh search prs' "$cleanup" | grep -v -- '--owner' || true)
+assert_eq "$unscoped" "" "cleanup: no sibling search runs unscoped across all of GitHub"
+# A numeric ticket is a weak query even when scoped, and a long result set means the query
+# was too broad — not that there are many siblings.
+assert_contains "$(cat "$cleanup")" "--match title,body" \
+  "cleanup: offers a more precise query than a bare number for github tickets"
+assert_contains "$(cat "$cleanup")" "A long result list is a symptom" \
+  "cleanup: says a long result set means a bad query, not many siblings"
 assert_contains "$(cat "$cleanup")" "never require a separate instruction" "cleanup: branch cleanup is unconditional"
 assert_contains "$(cat "$cleanup")" "gh pr view --json state,mergedAt" "cleanup: verifies the PR is merged before removing anything"
 assert_contains "$(cat "$cleanup")" "unknown, not absent" "cleanup: a failed sweep is reported distinctly from an empty one"
@@ -164,6 +179,8 @@ assert_contains "$(cat "$cleanup")" "display only" \
 red_flags=$(sed -n '/^## Red flags/,$p' "$cleanup")
 assert_contains "$red_flags" "merge-base" \
   "cleanup: red flags forbid waving the discard warning through"
+assert_contains "$red_flags" "--owner" \
+  "cleanup: red flags catch the unscoped sibling search"
 # Measured in the cleanup for #82: local base was moved *ahead* of the branch head before the
 # exit and the warning still fired, so the comparison is against the worktree's creation point.
 # Saying so is what stops the next reader re-running the same disproved experiment.
