@@ -137,6 +137,17 @@ assert_contains "$(cat "$cleanup")" "unknown, not absent" "cleanup: a failed swe
 assert_contains "$(cat "$cleanup")" "the command failing for any reason" "cleanup: any gh pr view failure is a stop, not just a non-merged state"
 assert_contains "$(cat "$cleanup")" "already gone" \
   "cleanup: Step 3 treats a worktree ExitWorktree already removed as success, not failure"
+# The sweep now reports a merged branch even when it is checked out, which
+# `git branch -d` refuses. Cleanup has to know to land on the base first.
+assert_contains "$(cat "$cleanup")" "The branch you are standing on" \
+  "cleanup: handles a swept branch that is the current branch"
+assert_contains "$(cat "$cleanup")" "refuses the checked-out branch" \
+  "cleanup: names why the current branch needs landing first, not -D"
+# Cleanup exists to leave a clean checkout behind for the next session.
+assert_contains "$(cat "$cleanup")" "End on the base branch" \
+  "cleanup: states its end state explicitly"
+assert_contains "$(cat "$cleanup")" "git branch --show-current      # must be" \
+  "cleanup: verifies where it landed rather than assuming"
 
 # --- batch: never auto-invoked, always explains its skips ---
 batch="$SKILLS/batch/SKILL.md"

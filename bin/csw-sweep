@@ -41,33 +41,107 @@ usage() {
 Usage:
   csw-sweep            Human-readable report of stale branches and worktrees
   csw-sweep branches   One stale local branch per line
-  csw-sweep worktrees  <path><TAB><branch> per line for worktrees holding one
+  csw-sweep worktrees  <path><TAB><branch> per line for linked worktrees holding
+                       one. The main working tree is never listed -- git refuses
+                       to remove it -- but its branch still appears in branches.
 EOF
 }
 
+# The base branch's upstream, e.g. `origin/main`, or empty when the base has no
+# upstream configured (or does not resolve at all). Reads only what the
+# remote-tracking ref already knows: csw-sweep is a reporting tool and must
+# never fetch, so it neither mutates refs nor touches the network.
+base_upstream() {
+  git rev-parse --abbrev-ref "$BASE@{upstream}" 2>/dev/null || true
+}
+
+# Local branches fully merged into <commit-ish>.
+# Plumbing, not `git branch --merged`: the porcelain command emits a synthetic
+# "(HEAD detached at ...)" pseudo-entry when HEAD is detached, which is not a
+# branch name and must never reach the output. for-each-ref only walks real refs.
+merged_into() { # commit-ish
+  git for-each-ref --format='%(refname:short)' --merged "$1" refs/heads 2>/dev/null || true
+}
+
+current_branch() {
+  git branch --show-current 2>/dev/null || true
+}
+
 stale_branches() {
-  local current merged gone
-  current=$(git branch --show-current 2>/dev/null || true)
+  local merged gone upstream
   # Merged into the base. Requires --merge merges; squash-merges are invisible here.
-  # Plumbing, not `git branch --merged`: the porcelain command emits a synthetic
-  # "(HEAD detached at ...)" pseudo-entry when HEAD is detached, which is not a
-  # branch name and must never reach the output. for-each-ref only walks real refs.
-  merged=$(git for-each-ref --format='%(refname:short)' --merged "$BASE" refs/heads 2>/dev/null || true)
+  merged=$(merged_into "$BASE")
+  # ...and merged into the base's upstream. On a machine where PRs are merged on
+  # the forge rather than locally — this workflow's whole premise — the local
+  # base is routinely behind, and a branch that genuinely shipped is not merged
+  # into it. Checking only the local base makes exactly the branches this tool
+  # exists to find invisible. Union rather than replace: the local base can
+  # legitimately carry merges the upstream has not seen yet.
+  upstream=$(base_upstream)
+  if [ -n "$upstream" ]; then
+    merged=$(printf '%s\n%s\n' "$merged" "$(merged_into "$upstream")")
+  fi
   # Upstream deleted — what `gh pr merge --delete-branch` leaves behind.
   gone=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null \
     | awk '$2 == "[gone]" { print $1 }')
+  # The base itself is excluded -- it is the thing everything else is measured
+  # against, never a leftover. -F because a base branch name is a literal, not a
+  # pattern: an unescaped `.` in `release/1.x` would otherwise match unrelated
+  # branch names and silently drop them from the sweep.
+  #
+  # The *current* branch is deliberately NOT excluded. It used to be, which
+  # hid the single branch a human is most likely to care about: standing on a
+  # branch that has already shipped, the sweep said nothing at all. Inside
+  # csw:cleanup that exclusion was invisible -- Steps 2-3 delete that branch
+  # before the sweep in Step 4 ever runs -- but standalone it made the tool
+  # silent about the obvious. Reporting it means a name in this output is no
+  # longer guaranteed to be deletable with `git branch -d` from where the
+  # caller stands; git refuses that loudly and harmlessly, and a caller that
+  # wants it gone has to land on the base branch first either way.
   printf '%s\n%s\n' "$merged" "$gone" \
     | sed -e '/^$/d' \
     | sort -u \
     | grep -Fvx "$BASE" \
-    | grep -Fvx "${current:-@@no-current-branch@@}" \
     || true
 }
 
+# A silent sweep and a stale one look identical from the outside, and the report
+# is the only place a human is reading prose. Say when the local base is behind
+# its upstream, so "nothing to sweep" can be read as an answer rather than as a
+# possibly-stale one. Prints nothing when the base has no upstream, when the
+# comparison cannot be made, or when the base is level with or ahead of it.
+base_behind_note() {
+  local upstream count
+  upstream=$(base_upstream)
+  [ -n "$upstream" ] || return 0
+  count=$(git rev-list --count "$BASE..$upstream" 2>/dev/null || true)
+  [ -n "$count" ] && [ "$count" != "0" ] || return 0
+  printf 'note: local %s is %s commit(s) behind %s (not fetched); swept against both\n' \
+    "$BASE" "$count" "$upstream"
+}
+
+# The main working tree's root, or empty if it cannot be determined. Used to
+# keep it out of the `worktrees` output: `git worktree remove` refuses the main
+# working tree outright, so listing it offers the caller an action that cannot
+# succeed. Its branch still shows up in `branches`, which is the actionable
+# signal -- land on the base branch, then delete.
+main_worktree() {
+  local common
+  common=$(git rev-parse --git-common-dir 2>/dev/null || true)
+  [ -n "$common" ] || return 0
+  # --git-common-dir may be relative (plain `.git`) or absolute depending on
+  # where it is run from; resolving through `cd` handles both, and -P matches
+  # the fully-resolved paths `git worktree list` prints. If it cannot be
+  # resolved, print nothing and let every worktree through -- degrading to the
+  # old, noisier behaviour beats dropping a real worktree from the sweep.
+  (cd "$common/.." 2>/dev/null && pwd -P) || true
+}
+
 stale_worktrees() {
-  local stale path ref short
+  local stale path ref short main
   stale=$(stale_branches)
   if [ -z "$stale" ]; then return 0; fi
+  main=$(main_worktree)
   # Hand path/ref pairs from awk to the read loop NUL-delimited, not
   # TAB-delimited: a worktree path is free to contain a literal TAB (rare,
   # but git allows it), and splitting on TAB would silently mis-parse such a
@@ -82,6 +156,7 @@ stale_worktrees() {
     END           { if (path != "") printf "%s%c%s%c", path, 0, ref, 0 }
   ' | while IFS= read -r -d '' path && IFS= read -r -d '' ref; do
     if [ -z "$ref" ]; then continue; fi
+    if [ -n "$main" ] && [ "$path" = "$main" ]; then continue; fi
     # The output contract is <path><TAB><branch>, one worktree per line, so a
     # line-oriented consumer can split each line on its first TAB. A path
     # that itself contains a TAB -- or a newline, which would break
@@ -118,6 +193,9 @@ case "${1:-}" in
   ''|report)
     b=$(stale_branches)
     w=$(stale_worktrees)
+    # Before the findings, and before "nothing to sweep" — the caveat has to
+    # reach the reader whether or not anything was found.
+    base_behind_note
     if [ -z "$b" ] && [ -z "$w" ]; then
       printf 'nothing to sweep\n'
       exit 0
@@ -128,7 +206,18 @@ case "${1:-}" in
     fi
     if [ -n "$b" ]; then
       printf 'Merged or upstream-gone branches:\n'
-      printf '%s\n' "$b" | sed -e 's/^/  /'
+      # Annotate the branch the caller is standing on. It is in the list like
+      # any other, but it is the one entry `git branch -d` will refuse from
+      # here, so the report says what to do about it rather than leaving the
+      # reader to decode git's error.
+      cur=$(current_branch)
+      printf '%s\n' "$b" | while IFS= read -r name; do
+        if [ -n "$cur" ] && [ "$name" = "$cur" ]; then
+          printf '  %s  (current branch — check out %s first, then delete)\n' "$name" "$BASE"
+        else
+          printf '  %s\n' "$name"
+        fi
+      done
     fi
     ;;
   -h|--help)

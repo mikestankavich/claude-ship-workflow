@@ -31,11 +31,22 @@ case "$branches" in
   *) PASSES=$((PASSES + 1)) ;;
 esac
 
-# The current branch is never swept, even when it is merged.
+# The current branch IS swept when it is merged. Standing on a branch that has
+# already shipped is the single case a human is most likely to care about, and
+# hiding it made the sweep silent about the obvious.
 git checkout -q feat/merged
-assert_eq "$("$BIN/csw-sweep" branches | grep -c 'feat/merged' || true)" "0" \
-  "current branch is never swept"
+assert_eq "$("$BIN/csw-sweep" branches | grep -c '^feat/merged$' || true)" "1" \
+  "a merged current branch is swept, not hidden"
+# ...and the report says what to do about it, since `git branch -d` refuses the
+# checked-out branch.
+cur_report=$("$BIN/csw-sweep")
+assert_contains "$cur_report" "current branch" "the report flags the current branch"
+assert_contains "$cur_report" "check out main first" \
+  "the report says to land on the base branch before deleting it"
+# The base branch is still never swept, even while standing on it.
 git checkout -q main
+assert_eq "$("$BIN/csw-sweep" branches | grep -c '^main$' || true)" "0" \
+  "the base branch is never swept, even as the current branch"
 
 # A worktree holding a merged branch shows up; one holding unmerged work does not.
 git worktree add -q "$repo/.claude/worktrees/merged" feat/merged
@@ -46,38 +57,61 @@ assert_contains "$worktrees" "worktrees/merged" "worktree on a merged branch is 
 assert_eq "$(printf '%s' "$worktrees" | grep -c . || true)" "1" \
   "only the merged worktree is swept"
 
+# The main working tree is never listed as a stale worktree, even when it holds
+# a merged branch: `git worktree remove` refuses it outright, so listing it
+# offers an action that cannot succeed. The branch itself still reports.
+mainwt=$(make_repo)
+write_config "$mainwt" <<'JSON'
+{ "baseBranch": "main", "worktreeDir": ".claude/worktrees" }
+JSON
+(
+  cd "$mainwt" || exit 1
+  git checkout -q -b feat/shipped
+  printf 's\n' >s.txt
+  git add -A && git commit -qm "shipped work"
+  git checkout -q main
+  git merge -q --no-ff -m "merge feat/shipped" feat/shipped
+  git checkout -q feat/shipped
+)
+assert_contains "$(cd "$mainwt" && "$BIN/csw-sweep" branches)" "feat/shipped" \
+  "a merged branch held by the main working tree still reports as a branch"
+assert_eq "$(cd "$mainwt" && "$BIN/csw-sweep" worktrees)" "" \
+  "the main working tree is never listed as a removable stale worktree"
+
 # A clean repo sweeps to nothing, and still exits 0.
 clean=$(make_repo)
 assert_eq "$(cd "$clean" && "$BIN/csw-sweep" branches)" "" "clean repo has no branches to sweep"
 assert_contains "$(cd "$clean" && "$BIN/csw-sweep")" "nothing to sweep" "clean repo reports nothing to sweep"
 assert_status 0 "clean sweep exits 0" -- in_dir "$clean" "$BIN/csw-sweep"
 
-# A `.` in the current branch name must not act as a regex wildcard and
-# swallow an unrelated merged branch (feat/a.b as current used to hide
-# feat/aXb, because grep -vx treated the current branch as a pattern).
+# A `.` in the BASE branch name must not act as a regex wildcard and swallow an
+# unrelated merged branch: `release/1.x` as a BRE pattern also matches
+# `release/1Xx`, which would silently drop a genuinely stale branch from the
+# sweep. This is what keeps the `grep -Fvx "$BASE"` filter honest. (The same
+# hazard used to exist on a current-branch filter, which no longer exists —
+# a merged current branch is now reported like any other.)
 dotrepo=$(make_repo)
 write_config "$dotrepo" <<'JSON'
-{ "baseBranch": "main", "worktreeDir": ".claude/worktrees" }
+{ "baseBranch": "release/1.x", "worktreeDir": ".claude/worktrees" }
 JSON
 (
   cd "$dotrepo" || exit 1
-  git checkout -q -b feat/a.b
-  printf 'ab\n' >ab.txt
-  git add -A && git commit -qm "a.b work"
-  git checkout -q main
-  git merge -q --no-ff -m "merge feat/a.b" feat/a.b
-
-  git checkout -q -b feat/aXb
+  git checkout -q -b "release/1.x"
+  git checkout -q -b "release/1Xx"
   printf 'axb\n' >axb.txt
-  git add -A && git commit -qm "aXb work"
-  git checkout -q main
-  git merge -q --no-ff -m "merge feat/aXb" feat/aXb
-
-  git checkout -q feat/a.b
+  git add -A && git commit -qm "1Xx work"
+  git checkout -q "release/1.x"
+  git merge -q --no-ff -m "merge release/1Xx" "release/1Xx"
 )
 dot_branches=$(cd "$dotrepo" && "$BIN/csw-sweep" branches)
-assert_contains "$dot_branches" "feat/aXb" \
-  "a dot in the current branch name does not swallow an unrelated merged branch"
+assert_contains "$dot_branches" "release/1Xx" \
+  "a dot in the base branch name does not swallow an unrelated merged branch"
+case "$dot_branches" in
+  *"release/1.x"*)
+    assert_eq "dotted-base-swept" "not-swept" \
+      "a base branch containing a dot is still never swept" ;;
+  *) PASSES=$((PASSES + 1)) ;;
+esac
 
 # A branch name with a `+` (also special to regexes) round-trips correctly
 # through both `branches` and `worktrees`.
@@ -220,5 +254,140 @@ case "$wtdot_worktrees" in
       "a worktree on an unmerged dotted branch must not be swept, even though its name regex-matches an unrelated merged branch" ;;
   *) PASSES=$((PASSES + 1)) ;;
 esac
+
+# --- The local base branch is behind its upstream -----------------------------
+#
+# The normal state on a machine where PRs are merged on the forge rather than
+# locally: `main` is stale, so a branch that genuinely shipped is not merged
+# into the *local* base and used to be invisible to the sweep entirely.
+#
+# make_upstream_clone prints the path of a fresh clone of an origin whose
+# `main` carries a `--no-ff` merge of `feat/already-merged` plus a later
+# commit. In the clone: `feat/already-merged` exists as a local branch with no
+# upstream of its own (so the `[gone]` path cannot be what reports it), an
+# unrelated `feat/never-merged` exists, and local `main` is reset back to the
+# pre-merge commit — three commits behind `origin/main`.
+make_upstream_clone() {
+  local origin base0 parent clone
+  origin=$(make_repo)
+  base0=$(git -C "$origin" rev-parse HEAD)
+  (
+    cd "$origin" || exit 1
+    git checkout -q -b feat/already-merged
+    printf 'm\n' >m.txt
+    git add -A && git commit -qm "work that shipped via a PR"
+    git checkout -q main
+    git merge -q --no-ff -m "merge feat/already-merged" feat/already-merged
+    printf 'more\n' >more.txt
+    git add -A && git commit -qm "later work on main"
+  ) || return 1
+  parent=$(mktemp -d)
+  TMPDIRS+=("$parent")
+  clone="$parent/work"
+  git clone -q "$origin" "$clone" || return 1
+  write_config "$clone" <<'JSON'
+{ "baseBranch": "main", "worktreeDir": ".claude/worktrees" }
+JSON
+  (
+    cd "$clone" || exit 1
+    git config user.email test@example.com
+    git config user.name "CSW Test"
+    git config commit.gpgsign false
+    # --no-track: this branch must have no upstream, so `[gone]` cannot be the
+    # reason it gets swept. Only the upstream-merged union can report it.
+    git branch --no-track feat/already-merged origin/feat/already-merged
+    git checkout -q -b feat/never-merged
+    printf 'n\n' >n.txt
+    git add -A && git commit -qm "work still in flight"
+    git checkout -q main
+    git reset -q --hard "$base0"
+  ) || return 1
+  printf '%s\n' "$clone"
+}
+
+behind=$(make_upstream_clone) || behind=""
+if [ -z "$behind" ]; then
+  FAILURES=$((FAILURES + 1))
+  printf 'FAIL could not build the behind-upstream fixture\n' >&2
+else
+  git -C "$behind" worktree add -q "$behind/.claude/worktrees/shipped" feat/already-merged
+
+  behind_branches=$(cd "$behind" && "$BIN/csw-sweep" branches)
+  assert_contains "$behind_branches" "feat/already-merged" \
+    "a branch merged into origin/<base> but not local <base> is swept"
+  case "$behind_branches" in
+    *feat/never-merged*)
+      assert_eq "unmerged-listed" "not-listed" \
+        "a branch merged into neither local nor upstream base is not swept" ;;
+    *) PASSES=$((PASSES + 1)) ;;
+  esac
+  case "$behind_branches" in
+    *main*)
+      assert_eq "base-listed" "not-listed" \
+        "the base branch is not swept just because it is an ancestor of its upstream" ;;
+    *) PASSES=$((PASSES + 1)) ;;
+  esac
+
+  behind_worktrees=$(cd "$behind" && "$BIN/csw-sweep" worktrees)
+  assert_contains "$behind_worktrees" "worktrees/shipped" \
+    "a worktree holding a branch merged only upstream is swept too"
+
+  # A stale local base must be visible in the report, so a silent answer is
+  # distinguishable from a stale one.
+  behind_report=$(cd "$behind" && "$BIN/csw-sweep")
+  assert_contains "$behind_report" "behind" "the report says the local base is behind"
+  assert_contains "$behind_report" "origin/main" "the report names the upstream it is behind"
+
+  # Read-only: reporting must not fetch, move refs, or touch the working tree.
+  before=$(cd "$behind" && git for-each-ref --format='%(refname) %(objectname)' | sort)
+  (cd "$behind" && "$BIN/csw-sweep" >/dev/null)
+  after=$(cd "$behind" && git for-each-ref --format='%(refname) %(objectname)' | sort)
+  assert_eq "$after" "$before" "the sweep does not move any ref"
+fi
+
+# No upstream configured on the base: behave exactly as before the fix — the
+# upstream-merged branch is invisible, and no staleness note is emitted.
+noup=$(make_upstream_clone) || noup=""
+if [ -z "$noup" ]; then
+  FAILURES=$((FAILURES + 1))
+  printf 'FAIL could not build the no-upstream fixture\n' >&2
+else
+  git -C "$noup" branch --unset-upstream main
+  noup_branches=$(cd "$noup" && "$BIN/csw-sweep" branches)
+  case "$noup_branches" in
+    *feat/already-merged*)
+      assert_eq "swept-without-upstream" "not-swept" \
+        "with no upstream on the base, the upstream-merged branch stays invisible" ;;
+    *) PASSES=$((PASSES + 1)) ;;
+  esac
+  noup_report=$(cd "$noup" && "$BIN/csw-sweep")
+  assert_contains "$noup_report" "nothing to sweep" \
+    "with no upstream on the base, the report is unchanged"
+  case "$noup_report" in
+    *behind*)
+      assert_eq "note-without-upstream" "no-note" \
+        "no upstream means no staleness note" ;;
+    *) PASSES=$((PASSES + 1)) ;;
+  esac
+fi
+
+# Base level with its upstream: the branch is swept via the local base as it
+# always was, and the staleness note must not fire spuriously.
+level=$(make_upstream_clone) || level=""
+if [ -z "$level" ]; then
+  FAILURES=$((FAILURES + 1))
+  printf 'FAIL could not build the level-with-upstream fixture\n' >&2
+else
+  git -C "$level" merge -q --ff-only origin/main
+  level_report=$(cd "$level" && "$BIN/csw-sweep")
+  assert_contains "$level_report" "feat/already-merged" \
+    "an up-to-date base still sweeps its merged branches"
+  case "$level_report" in
+    *behind*)
+      assert_eq "note-when-level" "no-note" \
+        "a base level with its upstream produces no staleness note" ;;
+    *) PASSES=$((PASSES + 1)) ;;
+  esac
+fi
 
 report
