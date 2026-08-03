@@ -120,5 +120,6 @@ assert_contains "$(cat "$cleanup")" "sibling" "cleanup: checks for sibling PRs i
 assert_contains "$(cat "$cleanup")" "never require a separate instruction" "cleanup: branch cleanup is unconditional"
 assert_contains "$(cat "$cleanup")" "gh pr view --json state,mergedAt" "cleanup: verifies the PR is merged before removing anything"
 assert_contains "$(cat "$cleanup")" "unknown, not absent" "cleanup: a failed sweep is reported distinctly from an empty one"
+assert_contains "$(cat "$cleanup")" "the command failing for any reason" "cleanup: any gh pr view failure is a stop, not just a non-merged state"
 
 report

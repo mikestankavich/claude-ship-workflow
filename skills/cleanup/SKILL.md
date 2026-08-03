@@ -24,11 +24,19 @@ gh pr view --json state,mergedAt
 If this run was chained straight from **csw:merge**, the merge is already confirmed there —
 say so, and this check simply passes; the chained path stays frictionless.
 
-If `state` is not `MERGED`, or there is no PR at all, **stop**. Name the branch and what you
-found, and ask whether to clean up anyway. This is the one case where branch and worktree
-cleanup asks: `git branch -d` refuses an unmerged branch on its own, but nothing stops
-`git worktree remove` from deleting the checkout that holds someone's unlanded work, and the
-worktree carries no such protection of its own.
+The only thing that authorises deletion is `gh pr view` reporting `state: MERGED`. Anything
+else is a stop-and-ask: a non-merged state, no PR for this branch, or
+**the command failing for any reason** — no auth, no configured remote, a network error, or
+anything else. Command failure is not "no signal, treat it as merged" — it is exactly the same
+stop as an explicit non-merged state. No substitute may be used to establish the merge
+instead: not `git log --merges`, not `git branch --merged`, not reading the PR page. Only
+`gh pr view` reporting `state: MERGED` counts.
+
+If the check does not clear, **stop**. Name the branch and what you found — including the raw
+error if the command itself failed — and ask whether to clean up anyway. This is the one case
+where branch and worktree cleanup asks: `git branch -d` refuses an unmerged branch on its own,
+but nothing stops `git worktree remove` from deleting the checkout that holds someone's
+unlanded work, and the worktree carries no such protection of its own.
 
 Once the merge is confirmed:
 
@@ -73,7 +81,7 @@ reach for `-D`.
 The remote branch is already gone if the merge used `--delete-branch`. If it is still there:
 
 ```bash
-git push origin --delete "<branch>"
+git push origin --delete "<branch from Step 1>"
 ```
 
 ## Step 4: Sweep for everything else
@@ -94,7 +102,8 @@ someone has to remember into something reported unprompted. Report what it found
 it found nothing.
 
 Then **ask before touching any of it**. These are other people's leftovers as far as this
-session is concerned — list them, propose removing them, and wait.
+session is concerned — list them, propose removing them, and wait. A vague "sure, clean it
+up" is not approval for a list: either they name what goes, or ask again.
 
 A stale worktree that `csw-sweep` lists but `git worktree remove` refuses to delete is the
 known rough edge at the worktree-plus-shipped intersection. Report it plainly rather than
@@ -122,6 +131,7 @@ is clean, even when it is obvious. Propose it, name what you would set it to, an
 | Thought | Reality |
 |---|---|
 | "The worktree is right here, so it must be safe to remove" | Confirm the merge first. A worktree existing says nothing about whether its branch shipped. |
+| "`gh pr view` failed, but I can check `git log` instead" | No substitute counts. Command failure is a stop, the same as an explicit non-merged state. |
 | "I'll ask before deleting the worktree" | Once the merge is confirmed, do not. Removing its worktree from there is bookkeeping. Asking again is how it gets forgotten. |
 | "The ticket is clearly done, I'll close it" | Always ask. Every time. |
 | "The sweep is empty, nothing to report" | Report the empty sweep. Silence reads as "not checked". |
