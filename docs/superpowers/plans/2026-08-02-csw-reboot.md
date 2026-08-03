@@ -3096,6 +3096,8 @@ assert_contains "$(cat "$batch")" "A failed selection is never an empty selectio
   "batch: a filter failure is reported distinctly from an empty batch"
 assert_contains "$(cat "$batch")" "can only lower tonight's cap, never raise it" \
   "batch: the cap override is documented as lower-only"
+assert_contains "$(cat "$batch")" "csw-config get batch.maxTickets" \
+  "batch: reads the configured cap before evaluating an override"
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -3104,8 +3106,8 @@ assert_contains "$(cat "$batch")" "can only lower tonight's cap, never raise it"
 bash tests/test-skills.sh
 ```
 
-Expected: FAIL — `batch: never model-invoked` and the rest, `47 passed, 8 failed` (47 from the
-`work`, `merge`, and `cleanup` assertions already in place; all 8 new batch assertions fail
+Expected: FAIL — `batch: never model-invoked` and the rest, `47 passed, 9 failed` (47 from the
+`work`, `merge`, and `cleanup` assertions already in place; all 9 new batch assertions fail
 because `skills/batch/SKILL.md` does not exist yet).
 
 - [ ] **Step 3: Write the skill**
@@ -3183,13 +3185,20 @@ continue to Step 3. A failed selection is never an empty selection: a malformed 
 `selected`/`skipped` on stdout, and none of them mean "nothing eligible tonight."
 
 The optional cap override — $ARGUMENTS — can only lower tonight's cap, never raise it: the
-configured `batch.maxTickets` is a safety ceiling, not a default to override upward. Apply it
-after the filter returns. If $ARGUMENTS is a positive integer smaller than the length of
-`selected`, keep only its first that many entries — `selected` is already in dispatch order —
-and move the rest into the skip list with reason `batch cap override (<n>)`. If $ARGUMENTS is
-absent, not a positive integer, or greater than or equal to the configured cap, ignore it, say
-so, and dispatch the filter's own `selected` unchanged. Never guess at what a malformed
-override meant.
+configured `batch.maxTickets` is a safety ceiling, not a default to override upward. To
+evaluate it you need that ceiling in hand, so read it the same way Step 1 reads the tracker:
+
+```bash
+csw-config get batch.maxTickets
+```
+
+Apply the override after the filter returns. If $ARGUMENTS is a positive integer smaller than
+the length of `selected`, keep only its first that many entries — `selected` is already in
+dispatch order — and move the rest into the skip list with reason `batch cap override (<n>)`.
+If $ARGUMENTS is absent, not a positive integer, or greater than or equal to the value
+`csw-config get batch.maxTickets` just printed, ignore it, say so in the summary, and dispatch
+the filter's own `selected` unchanged. Never guess at what a malformed override meant, and
+never guess at the configured cap either — read it.
 
 ## Step 3: Confirm the selection
 
@@ -3262,7 +3271,7 @@ Then stop. Merging the night's PRs is a morning decision, made by a human lookin
 bash tests/run-tests.sh
 ```
 
-Expected: PASS across every test file. `test-skills.sh` reports `62 passed, 0 failed`.
+Expected: PASS across every test file. `test-skills.sh` reports `63 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 

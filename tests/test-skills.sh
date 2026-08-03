@@ -142,5 +142,7 @@ assert_contains "$(cat "$batch")" "A failed selection is never an empty selectio
   "batch: a filter failure is reported distinctly from an empty batch"
 assert_contains "$(cat "$batch")" "can only lower tonight's cap, never raise it" \
   "batch: the cap override is documented as lower-only"
+assert_contains "$(cat "$batch")" "csw-config get batch.maxTickets" \
+  "batch: reads the configured cap before evaluating an override"
 
 report

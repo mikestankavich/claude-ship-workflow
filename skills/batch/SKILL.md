@@ -68,13 +68,20 @@ continue to Step 3. A failed selection is never an empty selection: a malformed 
 `selected`/`skipped` on stdout, and none of them mean "nothing eligible tonight."
 
 The optional cap override — $ARGUMENTS — can only lower tonight's cap, never raise it: the
-configured `batch.maxTickets` is a safety ceiling, not a default to override upward. Apply it
-after the filter returns. If $ARGUMENTS is a positive integer smaller than the length of
-`selected`, keep only its first that many entries — `selected` is already in dispatch order —
-and move the rest into the skip list with reason `batch cap override (<n>)`. If $ARGUMENTS is
-absent, not a positive integer, or greater than or equal to the configured cap, ignore it, say
-so, and dispatch the filter's own `selected` unchanged. Never guess at what a malformed
-override meant.
+configured `batch.maxTickets` is a safety ceiling, not a default to override upward. To
+evaluate it you need that ceiling in hand, so read it the same way Step 1 reads the tracker:
+
+```bash
+csw-config get batch.maxTickets
+```
+
+Apply the override after the filter returns. If $ARGUMENTS is a positive integer smaller than
+the length of `selected`, keep only its first that many entries — `selected` is already in
+dispatch order — and move the rest into the skip list with reason `batch cap override (<n>)`.
+If $ARGUMENTS is absent, not a positive integer, or greater than or equal to the value
+`csw-config get batch.maxTickets` just printed, ignore it, say so in the summary, and dispatch
+the filter's own `selected` unchanged. Never guess at what a malformed override meant, and
+never guess at the configured cap either — read it.
 
 ## Step 3: Confirm the selection
 
