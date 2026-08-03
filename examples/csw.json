@@ -12,7 +12,7 @@
       "run": "just backend migrate-checksums"
     },
     {
-      "when": "web/**/*.tsx",
+      "when": "web/**.tsx",
       "run": "just playwright-preview"
     }
   ],

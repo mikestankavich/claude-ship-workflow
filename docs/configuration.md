@@ -47,7 +47,7 @@ validation run:
 ```json
 "gates": [
   { "when": "**/migrations/**", "run": "just backend migrate-checksums" },
-  { "when": "web/**/*.tsx",     "run": "just playwright-preview" }
+  { "when": "web/**.tsx",       "run": "just playwright-preview" }
 ]
 ```
 
@@ -61,6 +61,11 @@ Glob semantics:
 
 Patterns are anchored to the whole path, so `migrations/**` matches `migrations/0042.sql`
 but not `backend/migrations/0042.sql`. Use `**/migrations/**` for the nested case.
+
+Watch for the same trap the other way around: `web/**/*.tsx` requires a directory segment
+between `web/` and the file, because the `/` between `**` and `*.tsx` is a literal character in
+the pattern — it matches `web/nav/Menu.tsx` but **not** `web/Menu.tsx` directly under `web/`.
+Drop the middle slash — `web/**.tsx` — to match both, since `**` can absorb the separator itself.
 
 Gates exist for the checks CI cannot or does not run — a checksum regeneration that only
 matters when a migration lands, or a browser suite that only runs against a preview
@@ -109,9 +114,15 @@ See [examples/csw.json](../examples/csw.json) for the complete version, and this
 | Exit | Meaning |
 |---|---|
 | `0` | Success. A key explicitly set to `null` prints `null` at exit `0` — that is different from the key being absent. |
+| `1` | `csw-sweep` only: the current directory is a bare repository (no working tree), so there is nothing to sweep. |
 | `2` | Bad usage: an unknown subcommand, wrong argument count, or an unknown config key. |
 | `3` | Not inside a git repository. |
 | `4` | The config file is not valid JSON, or is valid JSON that is not a JSON object (an array, a string, a number). |
 
 `csw-gates` reuses exit `4` for a malformed `gates` value: not an array, an entry that is
 not an object, or an entry missing `when` or `run`.
+
+`csw-ticket` reuses exit `4` for a broken `ticketPrefix` or `branchPattern` — an invalid prefix,
+or a `branchPattern` that has no `<ticket>`/`<slug>` placeholder or renders to something that
+is not a legal git branch name. That is a config problem, the same class as the two rows above
+it, not a bad invocation of `csw-ticket` itself (which is exit `2`).

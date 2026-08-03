@@ -19,6 +19,10 @@ assert_eq "$(printf 'backend/migrations/0042.sql\n' | in_dir "$repo" "$BIN/csw-g
   "just backend migrate-checksums" "example config's migration gate fires"
 assert_eq "$(printf 'README.md\n' | in_dir "$repo" "$BIN/csw-gates" --files)" "" \
   "unrelated change triggers no gate"
+assert_eq "$(printf 'web/Menu.tsx\n' | in_dir "$repo" "$BIN/csw-gates" --files)" \
+  "just playwright-preview" "example config's playwright gate fires on a top-level web/*.tsx file"
+assert_eq "$(printf 'web/app/nav/Menu.tsx\n' | in_dir "$repo" "$BIN/csw-gates" --files)" \
+  "just playwright-preview" "example config's playwright gate fires on a nested web/**/*.tsx file"
 
 # --- Every executable in bin/ is executable and starts with a #!/usr/bin/env shebang. ---
 for f in "$REPO_ROOT"/bin/*; do

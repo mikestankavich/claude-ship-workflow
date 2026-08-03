@@ -63,13 +63,34 @@ gh pr merge <number> --merge --delete-branch
 ```
 
 **Always `--merge`. Never `--squash`, never `--rebase`.** Cleanup finds stale branches with
-`git branch --merged`, and a squash-merged branch is invisible to it — squashing here quietly
-breaks the sweep that the next phase depends on.
+`git for-each-ref --merged` (not the porcelain `git branch --merged`, which leaks a synthetic
+detached-HEAD pseudo-entry), and a squash-merged branch is invisible to either — squashing here
+quietly breaks the sweep that the next phase depends on.
 
-Check whether the command actually succeeded before doing anything else. A non-zero exit —
-branch protection, a missing required review, a race with someone else's merge — means the PR
-is still open and its branch still exists. Stop: report the error, leave the branch and the
-worktree exactly as they are, and do not proceed to Step 5.
+Check whether the command actually succeeded — but do not read a non-zero exit as "the PR is
+still open." `--delete-branch` also deletes the *local* branch, which runs `git checkout <base>`
+then `git branch -D <branch>`, and this always runs from inside a worktree, where both of those
+fail:
+
+```
+$ git checkout main
+fatal: 'main' is already used by worktree at '/…/m'
+$ git branch -D feat/x
+error: cannot delete branch 'feat/x' used by worktree
+```
+
+So the PR can merge server-side while `gh pr merge` still returns non-zero for an unrelated
+local-cleanup failure. Do not assume either outcome from the exit code alone — re-establish
+ground truth:
+
+```bash
+gh pr view <number> --json state,mergedAt
+```
+
+`state: MERGED` means the merge succeeded regardless of what `gh pr merge` returned: proceed to
+Step 5. Anything else — still `OPEN`, or `gh pr view` itself failing — means the merge genuinely
+did not happen. Stop: report the error, leave the branch and the worktree exactly as they are,
+and do not proceed to Step 5.
 
 ## Step 5: Chain into cleanup, but only after a confirmed merge
 

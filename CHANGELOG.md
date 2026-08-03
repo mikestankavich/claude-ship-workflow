@@ -29,7 +29,8 @@ done, CSW owns how it gets shipped and closed out.
 
 ### Changed
 - Ships as a Claude Code plugin marketplace instead of a shell installer.
-- Repository renamed to `claude-ship-workflow`.
+- Repository rename to `claude-ship-workflow` is planned to follow this release, once this
+  branch merges.
 
 ## [0.4.0] - 2026-03-23
 

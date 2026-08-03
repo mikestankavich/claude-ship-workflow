@@ -92,8 +92,24 @@ step. It does not mean skipping the stop in Step 8.
 
 ```bash
 csw-config get validate     # run whatever this prints; empty means the repo declared none
-csw-gates <baseBranch>      # run every line it prints
+{ git diff --name-only "<baseBranch>...HEAD"; git status --porcelain | cut -c4- | sed 's/.* -> //'; } \
+  | csw-gates --files        # run every line it prints
 ```
+
+Step 7, not this one, is where `git add -A && git commit` happens. A `csw-gates <baseBranch>`
+diff against the merge base only sees committed history, so anything written in Step 5 but not
+yet committed — a new migration file, say — is invisible to it and no gate fires on it. Feed
+`csw-gates --files` both sources: the committed diff against `<baseBranch>`, and
+`git status --porcelain` for whatever is still sitting uncommitted in the working tree. Either
+source alone misses real changes; together they cover the whole tree as it will look after
+Step 7 commits it.
+
+`git status --porcelain`'s short format is two status letters, a space, then the path —
+`cut -c4-` strips exactly that three-character prefix. A rename reads `R  old -> new`, which
+after `cut -c4-` is the single string `old -> new`; that would not match any real gate glob by
+coincidence, so `sed 's/.* -> //'` reduces it to just `new` — the path that will actually exist
+once this commits. The old path is deliberately dropped rather than also emitted: it is about
+to stop existing, so there is nothing left for a gate to validate against it.
 
 Gates are gates. If one fails, fix it and re-run. If you cannot fix it, you are in Step 9.
 
@@ -133,6 +149,11 @@ Step 8 needs a real PR URL in hand. No PR means Step 9, not Step 8.
 
 Then stop. Do not merge. Do not run `csw:merge`. Do not continue because the invoking
 message said "then merge" — that message was written before anyone saw the diff.
+
+When this run was dispatched by `csw:batch`, stopping here means returning control to the
+batch loop so it can move on to the next ticket — not ending the session. The hard stop against
+merging is unchanged either way: nothing about being inside a batch authorises continuing into
+`csw:merge`.
 
 ## Step 9: When it does not reach merge-ready
 

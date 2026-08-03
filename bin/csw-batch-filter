@@ -53,7 +53,15 @@ def load_config():
         text=True,
     )
     if proc.returncode != 0:
-        sys.stderr.write("csw-batch-filter: %s" % proc.stderr)
+        # csw-config's own message already carries a "csw-config: " prefix;
+        # strip it so the message reaching the user has exactly one house
+        # prefix, matching how bin/csw-sweep's config_get() reports the same
+        # class of failure rather than stacking "csw-batch-filter: csw-config: ".
+        detail = proc.stderr.strip()
+        if detail.startswith("csw-config: "):
+            detail = detail[len("csw-config: "):]
+        sys.stderr.write("csw-batch-filter: could not read config (csw-config exited %d): %s\n"
+                          % (proc.returncode, detail))
         sys.exit(proc.returncode)
     return json.loads(proc.stdout)
 

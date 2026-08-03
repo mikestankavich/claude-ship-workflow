@@ -89,6 +89,12 @@ assert_contains "$(cat "$work")" "EnterWorktree" "work: prefers the native workt
 assert_contains "$(cat "$work")" "--draft" "work: knows the draft-PR rule"
 assert_contains "$(cat "$work")" "Hold for review is a hard stop" "work: states the hard stop"
 assert_contains "$(cat "$work")" "No PR means Step 9, not Step 8" "work: Step 7 failures route to Step 9"
+assert_contains "$(cat "$work")" "csw-gates --files" \
+  "work: Step 6 gates the working tree via --files, not a bare baseBranch diff"
+assert_contains "$(cat "$work")" "git status --porcelain" \
+  "work: Step 6 feeds uncommitted changes into the gate check, not just the committed diff"
+assert_contains "$(cat "$work")" "returning control to the" \
+  "work: Step 8's hard stop acknowledges being dispatched from csw:batch"
 if grep -q "gh pr merge" "$work"; then
   FAILURES=$((FAILURES + 1))
   printf 'FAIL work: must never merge\n' >&2
@@ -100,8 +106,12 @@ fi
 merge="$SKILLS/merge/SKILL.md"
 assert_contains "$(cat "$merge")" "gh pr checks" "merge: checks CI"
 assert_contains "$(cat "$merge")" "gh pr merge" "merge: merges the PR"
-assert_contains "$(cat "$merge")" "--merge --delete-branch" "merge: merge commit, delete the remote branch"
+assert_contains "$(cat "$merge")" "--merge --delete-branch" "merge: merge commit, delete the branch (local and remote)"
 assert_contains "$(cat "$merge")" "csw:cleanup" "merge: chains into cleanup"
+assert_contains "$(cat "$merge")" "gh pr view <number> --json state,mergedAt" \
+  "merge: re-establishes ground truth on a non-zero gh pr merge exit instead of assuming it failed"
+assert_contains "$(cat "$merge")" "git for-each-ref --merged" \
+  "merge: cites the mechanism cleanup actually uses to find stale branches"
 # The skill may *mention* --squash to forbid it; it must never *use* it.
 bad_flags=$(grep "gh pr merge" "$merge" | grep -E -- "--squash|--rebase" || true)
 assert_eq "$bad_flags" "" "merge: no gh pr merge line uses --squash or --rebase"
@@ -121,6 +131,8 @@ assert_contains "$(cat "$cleanup")" "never require a separate instruction" "clea
 assert_contains "$(cat "$cleanup")" "gh pr view --json state,mergedAt" "cleanup: verifies the PR is merged before removing anything"
 assert_contains "$(cat "$cleanup")" "unknown, not absent" "cleanup: a failed sweep is reported distinctly from an empty one"
 assert_contains "$(cat "$cleanup")" "the command failing for any reason" "cleanup: any gh pr view failure is a stop, not just a non-merged state"
+assert_contains "$(cat "$cleanup")" "already gone" \
+  "cleanup: Step 3 treats a worktree ExitWorktree already removed as success, not failure"
 
 # --- batch: never auto-invoked, always explains its skips ---
 batch="$SKILLS/batch/SKILL.md"

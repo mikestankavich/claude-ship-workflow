@@ -82,9 +82,10 @@ stale_worktrees() {
     END           { if (path != "") printf "%s%c%s%c", path, 0, ref, 0 }
   ' | while IFS= read -r -d '' path && IFS= read -r -d '' ref; do
     if [ -z "$ref" ]; then continue; fi
-    # The *output* contract is <path><TAB><branch> (Task 9 parses it that
-    # way), so a path that itself contains a TAB -- or a newline, which
-    # would break line-oriented consumers -- cannot be represented in it.
+    # The output contract is <path><TAB><branch>, one worktree per line, so a
+    # line-oriented consumer can split each line on its first TAB. A path
+    # that itself contains a TAB -- or a newline, which would break
+    # line-oriented consumers -- cannot be represented in that contract.
     # Fail loudly and specifically rather than silently truncating or
     # mis-parsing: a missed stale worktree is exactly the failure this
     # program exists to prevent. (A literal newline embedded in a path

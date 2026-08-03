@@ -65,15 +65,32 @@ Worktree removal must run from outside the worktree being removed.
 
 No confirmation here — Step 1 already confirmed the merge. This is bookkeeping, and it **should never require a separate instruction**.
 
-```bash
-git worktree remove "<path from Step 1>"
-git worktree prune
-git branch -d "<branch from Step 1>"
-```
+What happens next depends on what Step 2 actually did:
 
-If `git worktree remove` refuses because of uncommitted changes, stop and show them. Work
-that never made it into the merged PR is not clutter — report it and let the human decide.
-Only use `--force` if they say so.
+- **Step 2 used the native ExitWorktree tool.** It already owns removal, so the worktree is
+  already gone. Running `git worktree remove` again on a path it already removed fails with
+  `fatal: '<path>' is not a working tree` (exit 128) — that is "already gone," which is success,
+  not a problem to report. Skip straight to pruning and the branch delete:
+
+  ```bash
+  git worktree prune
+  git branch -d "<branch from Step 1>"
+  ```
+
+- **Step 2 fell back to the manual `cd`/`checkout` path** because no native tool existed. The
+  worktree is still there, so remove it first:
+
+  ```bash
+  git worktree remove "<path from Step 1>"
+  git worktree prune
+  git branch -d "<branch from Step 1>"
+  ```
+
+  If `git worktree remove` refuses because of uncommitted changes, stop and show them. Work
+  that never made it into the merged PR is not clutter — report it and let the human decide.
+  Only use `--force` if they say so. This uncommitted-changes stop is specific to the manual
+  path — it cannot happen on the ExitWorktree path, since that tool has already removed the
+  worktree by the time this step runs.
 
 If `git branch -d` refuses, the branch is not merged into the base. Say so and stop; do not
 reach for `-D`.
