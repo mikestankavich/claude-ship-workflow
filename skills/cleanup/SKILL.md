@@ -48,7 +48,32 @@ csw-config get baseBranch
 
 Capture all three now. Step 2 changes directory and Step 3 needs these values.
 
-## Step 2: Leave the worktree
+## Step 2: Pull the base branch, then leave the worktree
+
+The pull comes first, from **inside** the worktree, while the worktree still exists. Step 1
+has already confirmed the PR is `MERGED`, so `origin/<baseBranch>` is guaranteed to carry the
+merge by the time this runs — but the *local* base branch does not, and anything that compares
+this branch against a stale local base will conclude that work already on the remote is
+unmerged.
+
+From inside a worktree, `git checkout <base>` and `git fetch origin <base>:<base>` are both
+refused: the main checkout holds that branch. What works is updating that other checkout in
+place:
+
+```bash
+main_checkout=$(git -C "$(git rev-parse --git-common-dir)/.." rev-parse --show-toplevel)
+git -C "$main_checkout" status --porcelain     # must be empty
+git -C "$main_checkout" pull
+```
+
+Guard it on that `status --porcelain`. If the main checkout is dirty, the pull can fail or
+conflict — skip it and say plainly that you did, rather than pulling over someone's
+uncommitted work. Likewise if the main checkout is not sitting on `<baseBranch>`: the pull
+updates whatever branch it is on, which is harmless but is not the base pull, so report that
+too. In every one of those cases a failed or skipped pull **must not block the cleanup**. What
+protects the work is the verification below, not this pull.
+
+### Leave the worktree
 
 Use the native **ExitWorktree** tool if one exists — it owns removal for worktrees it
 created. Otherwise move to the main worktree root by hand:
@@ -59,7 +84,55 @@ cd "$(git -C "$(git rev-parse --git-common-dir)/.." rev-parse --show-toplevel)"
 
 Worktree removal must run from outside the worktree being removed.
 
-Then, **on either path**, land on the base branch and take the remote's latest:
+### When ExitWorktree warns it will discard commits
+
+`ExitWorktree` refuses to remove a worktree whose branch it believes carries unmerged
+commits, and asks to be re-invoked with `discard_changes: true`:
+
+```
+Worktree has 2 commits on worktree-fix+76-csw-sweep-misses-branches-merged-upstrea.
+Removing will discard this work permanently. Confirm with the user, then re-invoke
+with discard_changes: true — or use action: "keep" to preserve the worktree.
+```
+
+**Expect this. It is the ordinary case, not an anomaly** — cleanup always runs immediately
+after a forge-side merge, which is exactly when a branch's commits are on the remote and not
+yet anywhere the tool is looking. Neither reflex is acceptable: stalling on a warning you have
+not checked, or passing `discard_changes: true` because the PR is merged and the warning
+"must" be spurious. The second one eventually discards work that really was unmerged.
+
+Prove it instead. The refused exit leaves you still inside the worktree, so this runs from
+right there — capture the branch head **before** exiting, because afterwards the branch may
+be gone:
+
+```bash
+head_sha=$(git rev-parse HEAD)
+git fetch -q origin
+git merge-base --is-ancestor "$head_sha" "origin/<baseBranch>"
+```
+
+Exit 0 proves every commit on this branch is already in `origin/<baseBranch>`. Nothing is
+lost; re-invoke `ExitWorktree` with `discard_changes: true` and carry on.
+**Non-zero means the warning is real** — there are commits here that did not ship. Stop,
+report the SHAs (`git log --oneline "origin/<baseBranch>..HEAD"`), and do not discard.
+
+This proves safety directly rather than inferring it from the tool's warning, so it holds no
+matter what the tool is comparing against.
+
+Two things this is **not**:
+
+- **Not the branch rename.** The name in the warning is the pre-rename `worktree-<slug>` that
+  `csw:work` Step 4 renamed away, which makes the rename look causal. It is not: the commit
+  *count* is correct, and a branch name that no longer exists could not produce a correct
+  count. The stale name is display only. Renaming back will not suppress the warning, and the
+  rename is what ties the branch to its ticket — do not abandon it.
+- **Not a reason to skip Step 1.** A merged PR is not by itself proof that *this* branch head
+  is in the base. Verify the SHA.
+
+### Land on the base branch
+
+Once the worktree is gone, **on either path**, land on the base branch and take the remote's
+latest:
 
 ```bash
 git checkout "<baseBranch>"
@@ -199,6 +272,8 @@ is clean, even when it is obvious. Propose it, name what you would set it to, an
 | "The ticket is clearly done, I'll close it" | Always ask. Every time. |
 | "The sweep is empty, nothing to report" | Report the empty sweep. Silence reads as "not checked". |
 | "`csw-sweep` printed nothing, so there's nothing stale" | Check the exit code. Non-zero means the sweep did not run — unknown is not the same as absent. |
+| "The PR is merged, so ExitWorktree's discard warning is obviously spurious" | Prove it. `git merge-base --is-ancestor "$head_sha" origin/<base>` exiting 0, or stop. Reflexive `discard_changes: true` is how real work gets deleted. |
+| "The warning names a branch that no longer exists, so it's stale nonsense" | The name is display only; the commit count is correct. Run the `merge-base` check — do not dismiss it, and do not stall on it either. |
 | "The sweep flagged the branch I'm on, so it must be confused" | It is not. Land on the base branch, then delete it. Standing on shipped work is the ordinary case, not an anomaly. |
 | "`git branch -d` refused the current branch, so I'll leave it" | Refusing the *checked-out* branch is not the unmerged-commits refusal. Check out the base first, then delete. |
 | "Cleanup is done, wherever the checkout happens to be" | It ends on the base branch, current with its remote. Anything else backdates the next branch cut from it. |

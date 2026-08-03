@@ -148,6 +148,41 @@ assert_contains "$(cat "$cleanup")" "End on the base branch" \
   "cleanup: states its end state explicitly"
 assert_contains "$(cat "$cleanup")" "git branch --show-current      # must be" \
   "cleanup: verifies where it landed rather than assuming"
+# ExitWorktree's "will discard N commits" warning fires on essentially every cleanup,
+# because cleanup always runs right after a forge-side merge. It must be proven false
+# against the remote, never waved through and never stalled on.
+assert_contains "$(cat "$cleanup")" "git merge-base --is-ancestor" \
+  "cleanup: proves the discard warning false against the remote instead of trusting it"
+assert_contains "$(cat "$cleanup")" "Non-zero means the warning is real" \
+  "cleanup: a non-zero merge-base check stops the cleanup"
+assert_contains "$(cat "$cleanup")" "discard_changes: true" \
+  "cleanup: names the flag that must never be passed unverified"
+assert_contains "$(cat "$cleanup")" "display only" \
+  "cleanup: says the stale branch name in the warning is cosmetic, not a reason to dismiss the count"
+# Red flags are where an agent looks when it is about to rationalise. The verification
+# rule has to appear there too, not only in the step prose.
+red_flags=$(sed -n '/^## Red flags/,$p' "$cleanup")
+assert_contains "$red_flags" "merge-base" \
+  "cleanup: red flags forbid waving the discard warning through"
+
+# The base pull has to happen *before* ExitWorktree runs, so the tool compares against a
+# base branch that already carries the merge. Ordering is the whole point of the change,
+# and a needle-anywhere assertion cannot see ordering.
+pull_line=$(grep -n 'main_checkout" pull' "$cleanup" | head -1 | cut -d: -f1)
+leave_line=$(grep -n '^### Leave the worktree' "$cleanup" | head -1 | cut -d: -f1)
+if [ -n "$pull_line" ] && [ -n "$leave_line" ] && [ "$pull_line" -lt "$leave_line" ]; then
+  PASSES=$((PASSES + 1))
+else
+  FAILURES=$((FAILURES + 1))
+  printf 'FAIL cleanup: the base pull must precede leaving the worktree (pull at line [%s], exit at line [%s])\n' \
+    "${pull_line:-none}" "${leave_line:-none}" >&2
+fi
+# A dirty main checkout makes the pull fail or conflict; it must be skipped, not forced,
+# and its failure must never block a cleanup that Step 1 already verified is safe.
+assert_contains "$(cat "$cleanup")" 'git -C "$main_checkout" status --porcelain' \
+  "cleanup: guards the pre-exit pull against a dirty main checkout"
+assert_contains "$(cat "$cleanup")" "must not block the cleanup" \
+  "cleanup: a failed pre-exit pull is reported, not fatal"
 
 # --- batch: never auto-invoked, always explains its skips ---
 batch="$SKILLS/batch/SKILL.md"
