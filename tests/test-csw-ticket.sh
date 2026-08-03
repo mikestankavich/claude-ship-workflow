@@ -122,4 +122,36 @@ assert_status 2 "leading digits exits 2" -- "$BIN/csw-ticket" normalize "12AB34"
 assert_status 2 "trailing extra segment exits 2" -- "$BIN/csw-ticket" normalize "TRA-1088-extra"
 assert_status 2 "unparseable words exit 2" -- "$BIN/csw-ticket" normalize "not a ticket"
 
+# --- GitHub-tracked repos: a bare issue number IS the canonical reference ---
+# There is no prefix to configure, and issue numbers are unambiguous within a
+# repo, so requiring ticketPrefix would make `tracker: github` undispatchable.
+gh=$(make_repo)
+write_config "$gh" <<'JSON'
+{ "tracker": "github", "branchPattern": "<type>/<ticket>-<slug>" }
+JSON
+assert_eq "$(in_dir "$gh" "$BIN/csw-ticket" normalize 68)" "68" "github: bare number resolves to itself"
+assert_eq "$(in_dir "$gh" "$BIN/csw-ticket" normalize '#68')" "68" "github: leading # is stripped"
+assert_eq "$(in_dir "$gh" "$BIN/csw-ticket" number 68)" "68" "github: number of a bare reference"
+assert_eq "$(in_dir "$gh" "$BIN/csw-ticket" branch feat 68 'Add the prep pass')" \
+  "feat/68-add-the-prep-pass" "github: branch name from a bare issue number"
+
+# An explicit prefix still wins if someone configures one alongside github.
+ghp=$(make_repo)
+write_config "$ghp" <<'JSON'
+{ "tracker": "github", "ticketPrefix": "GH" }
+JSON
+assert_eq "$(in_dir "$ghp" "$BIN/csw-ticket" normalize 68)" "GH-68" "github + prefix: prefix still applies"
+
+# Other trackers keep rejecting a bare number - there it really is ambiguous.
+for tr in linear none; do
+  amb=$(make_repo)
+  printf '{ "tracker": "%s" }\n' "$tr" | write_config "$amb"
+  assert_status 2 "$tr: bare number still rejected" -- in_dir "$amb" "$BIN/csw-ticket" normalize 68
+done
+
+# The # form is only a prefix marker, not a licence for junk.
+assert_status 2 "github: bare # is not a reference" -- in_dir "$gh" "$BIN/csw-ticket" normalize '#'
+assert_status 2 "github: #abc is not a reference" -- in_dir "$gh" "$BIN/csw-ticket" normalize '#abc'
+assert_eq "$(in_dir "$gh" "$BIN/csw-ticket" normalize '#ENG-7')" "ENG-7" "github: # before a prefixed ref"
+
 report

@@ -11,6 +11,7 @@ usage() {
   cat <<'EOF'
 Usage:
   csw-ticket normalize <ref>                 1088 | tra-1088 | TRA-1088  ->  TRA-1088
+                                             68 | #68  ->  68   (tracker: github)
   csw-ticket number <ref>                    TRA-1088                    ->  1088
   csw-ticket slug <words...>                 "Add nav vocabulary"        ->  add-nav-vocabulary
   csw-ticket branch <type> <ref> <title...>  feat TRA-1088 "Add nav ..." ->  feat/tra-1088-add-nav-vocabulary
@@ -41,8 +42,11 @@ validate_prefix() {
 }
 
 normalize() {
-  local raw prefix letters digits
+  local raw prefix letters digits tracker
   raw=$(printf '%s' "${1-}" | tr -d '[:space:]')
+  # `#68` is how people write a GitHub issue. The marker carries no meaning
+  # beyond "this is an issue reference", so drop it and judge what is left.
+  raw=${raw#\#}
   if [ -z "$raw" ]; then die "empty ticket reference" 2; fi
 
   if printf '%s' "$raw" | grep -q '^[0-9][0-9]*$'; then
@@ -56,11 +60,21 @@ normalize() {
     # code (3 or 4).
     prefix=$(config get ticketPrefix) || exit $?
     validate_prefix "$prefix"
-    if [ -z "$prefix" ]; then
-      die "bare number '$raw' needs \"ticketPrefix\" in .claude/csw.json" 2
+    if [ -n "$prefix" ]; then
+      printf '%s-%s\n' "$prefix" "$raw"
+      return 0
     fi
-    printf '%s-%s\n' "$prefix" "$raw"
-    return 0
+    # No prefix configured. On GitHub the bare number IS the canonical
+    # reference — issues are numbered per repo, so there is nothing to
+    # disambiguate and demanding a ticketPrefix would make `tracker: github`
+    # undispatchable. Every other tracker keeps the strict rule: a bare number
+    # with no prefix genuinely does not identify anything.
+    tracker=$(config get tracker) || exit $?
+    if [ "$tracker" = "github" ]; then
+      printf '%s\n' "$raw"
+      return 0
+    fi
+    die "bare number '$raw' needs \"ticketPrefix\" in .claude/csw.json (or \"tracker\": \"github\")" 2
   fi
 
   # Dashed: a prefix (which may itself contain digits, e.g. a "K8S" team key)

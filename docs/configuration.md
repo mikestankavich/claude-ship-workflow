@@ -39,6 +39,28 @@ undashed reference where the prefix itself contains digits (`k8s42`) is genuinel
 about where the prefix ends and the ticket number begins, so it is rejected rather than
 guessed.
 
+### Ticket references and `tracker: github`
+
+`ticketPrefix` exists for trackers whose keys look like `ENG-1088`. GitHub has no such
+prefix — issues are numbered per repository, so the number alone already identifies one.
+
+With `"tracker": "github"` and no `ticketPrefix`, a bare number is therefore a valid
+reference and normalises to itself, and a leading `#` is accepted and stripped:
+
+```bash
+csw-ticket normalize 68     # -> 68
+csw-ticket normalize '#68'  # -> 68
+csw-ticket branch feat 68 'Add the prep pass'
+# -> feat/68-add-the-prep-pass
+```
+
+Set `ticketPrefix` alongside `tracker: github` and it still applies, so `68` becomes
+`GH-68` if that is what you want.
+
+Every other tracker keeps the strict rule: with no `ticketPrefix`, a bare number does not
+identify anything and is rejected with exit 2. That is deliberate — silently guessing which
+project a number belongs to is worse than refusing.
+
 ## Gates
 
 A gate is a glob and a command. When a changed file matches the glob, the command joins the
