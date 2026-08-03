@@ -221,4 +221,25 @@ assert_contains "$(cat "$batch")" "can only lower tonight's cap, never raise it"
 assert_contains "$(cat "$batch")" "csw-config get batch.maxTickets" \
   "batch: reads the configured cap before evaluating an override"
 
+# --- batch: the filter's three-key output, and the dry run that reads it ---
+
+# The skill has to name belowCap, because it is the group whose whole reason for existing
+# is that a reader can tell it apart from skipped. Prose that only mentions two groups
+# teaches the old shape back.
+assert_contains "$(cat "$batch")" "belowCap" "batch: names the filter's belowCap group"
+assert_contains "$(cat "$batch")" "never blames the cap" \
+  "batch: says skipped carries no cap reason"
+
+assert_contains "$(fm_field "$batch" 'argument-hint')" "--dry-run" \
+  "batch: the dry-run modifier is discoverable from the argument hint"
+assert_contains "$(cat "$batch")" '`dry-run` or `dry run`' \
+  "batch: documents the spellings a human will actually type"
+assert_contains "$(cat "$batch")" \
+  "no dispatch, no worktree, no branch, no pull request, no change to any ticket's state" \
+  "batch: a dry run is enumerated as having no side effects"
+assert_contains "$(cat "$batch")" "effective cap and where it came from" \
+  "batch: a dry run says which cap won, not just its value"
+assert_contains "$(cat "$batch")" "A filter failure in a dry run is a failure, not an empty plan" \
+  "batch: a dry run cannot launder a failed selection into a quiet night"
+
 report

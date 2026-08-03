@@ -1,7 +1,7 @@
 ---
 name: batch
 description: Dispatch a night's batch of Todo tickets — one worktree and one pull request each — and leave a morning summary. Run explicitly; never inferred.
-argument-hint: "[max-tickets]"
+argument-hint: "[max-tickets] [--dry-run]"
 disable-model-invocation: true
 ---
 
@@ -9,7 +9,17 @@ disable-model-invocation: true
 
 **Announce at start:** "Using csw:batch to dispatch tonight's tickets."
 
-Optional override for tonight's cap: $ARGUMENTS
+Tonight's invocation carried: $ARGUMENTS
+
+Two modifiers, and they compose:
+
+- **A bare integer** lowers tonight's cap. Never raises it — see Step 2.
+- **`--dry-run`**, also written `dry-run` or `dry run`, runs selection and stops — see
+  Step 3.
+
+So `/csw:batch 2 --dry-run` shows tonight's plan cut at 2 without dispatching anything.
+Anything else in $ARGUMENTS is not a modifier: say what you ignored and why, rather than
+guessing at what it meant.
 
 ## Before the first run: the prerequisite
 
@@ -61,6 +71,19 @@ review: preview environments merge every open non-draft PR together, so the morn
 tests the *combination*. Past three or four, a bug found there cannot be attributed without
 bisecting, and the review gate is what this whole design rests on.
 
+The cap is not a fourth filter, and the output keeps it separate. Three keys come back:
+
+| Key | Contents |
+|---|---|
+| `selected` | Dispatching tonight, in dispatch order. |
+| `belowCap` | Passed every filter and still fell outside the cap, in the order it would have been dispatched. |
+| `skipped` | Genuinely excluded — blocked, not Todo, same-surface cluster, single-writer conflict — each with its reason. |
+
+`belowCap` is never an exclusion, and `skipped` never blames the cap. Keep them apart
+everywhere you report them. Merged, nothing downstream can tell "must not run tonight" from
+"would have run with a bigger cap" — and those two answer different questions: the first is
+tuning data for the exclusion heuristics, the second is an argument for a different cap.
+
 **If `csw-batch-filter` exits non-zero, the batch does not run.** Report its stderr message
 verbatim, say plainly that selection failed and no tickets were dispatched, and stop — do not
 continue to Step 3. A failed selection is never an empty selection: a malformed ticket, a bad
@@ -77,25 +100,59 @@ csw-config get batch.maxTickets
 
 Apply the override after the filter returns. If $ARGUMENTS is a positive integer smaller than
 the length of `selected`, keep only its first that many entries — `selected` is already in
-dispatch order — and move the rest into the skip list with reason `batch cap override (<n>)`.
+dispatch order — and move the rest to the **front** of `belowCap`, ahead of the filter's own
+entries. They belong there and not in the skip list: nothing excluded them, and they are the
+very next tickets that would dispatch if the cap went back up. Front, because they outrank
+everything the filter had already put below the cap.
+
 If $ARGUMENTS is absent, not a positive integer, or greater than or equal to the value
 `csw-config get batch.maxTickets` just printed, ignore it, say so in the summary, and dispatch
 the filter's own `selected` unchanged. Never guess at what a malformed override meant, and
 never guess at the configured cap either — read it.
 
-## Step 3: Confirm the selection
+## Step 3: If this is a dry run, report and stop
 
-Show `selected` and every `skipped` entry with its reason, then wait for a go-ahead. This is
-the last human checkpoint before an unattended night — once given, Steps 4 through 6 run
-straight through with no further prompting and no further confirmation, until the morning
-summary reports what happened.
+A dry run answers "what would tonight do?" and nothing else. **It has no side effects:**
+no dispatch, no worktree, no branch, no pull request, no change to any ticket's state.
+Steps 4 through 7 do not run. The whole value is that it is free to run before an unattended
+night, and it is only free while it stays free of side effects.
 
-## Step 4: Dispatch each, in order
+Report all three groups — the plan is not the selected list alone:
+
+| Section | Contents |
+|---|---|
+| Would dispatch | Every `selected` id, in dispatch order |
+| Below the cap | Every `belowCap` id, in the order it would have been dispatched |
+| Excluded, and why | Every `skipped` id with its verbatim reason |
+
+Then state the **effective cap and where it came from** — the configured `batch.maxTickets`,
+or tonight's override, naming both the number and which one won. Someone reading this is
+deciding whether the cap is right; a bare "cap: 2" does not say whether that came from the
+config or from what they just typed.
+
+Then stop. A dry run ends here — there is no go-ahead to give, because nothing is waiting on
+one.
+
+**A filter failure in a dry run is a failure, not an empty plan.** Step 2 already stopped if
+`csw-batch-filter` exited non-zero; do not print three empty groups underneath it. Three
+empty groups mean "nothing was eligible tonight", which is the one thing a failed selection
+does not mean.
+
+## Step 4: Confirm the selection
+
+Show all three groups — `selected`, `belowCap`, and every `skipped` entry with its reason —
+then wait for a go-ahead. `belowCap` belongs in front of the human here: it is the only
+moment where "there were three more ready to go" can still change tonight's cap. This is the
+last human checkpoint before an unattended night — once given, Steps 5 through 7 run straight
+through with no further prompting and no further confirmation, until the morning summary
+reports what happened.
+
+## Step 5: Dispatch each, in order
 
 For each selected ticket, run **csw:work** with that ticket reference. Let it run to its hard
 stop at an open PR, then move to the next one. One worktree and one PR per ticket.
 
-## Step 5: When a ticket blocks
+## Step 6: When a ticket blocks
 
 An unattended batch has nobody to ask. So instead of stopping and waiting:
 
@@ -116,7 +173,7 @@ worth keeping, but it is not a merge candidate."
 The answer then lands in the ticket as durable context, so a re-dispatch starts from a better
 brief than the original. The loop compounds rather than merely parallelizes.
 
-## Step 6: Morning summary
+## Step 7: Morning summary
 
 Report, so the night does not have to be reconstructed by hand across the tracker:
 
@@ -125,6 +182,7 @@ Report, so the night does not have to be reconstructed by hand across the tracke
 | Dispatched | Every ticket the loop started |
 | PRs open | Ticket, PR URL, one line on what changed |
 | Blocked with questions | Ticket, the question asked, the draft PR |
+| Below the cap | Every `belowCap` id from Step 2, in order — tonight's queue, not tonight's rejects |
 | Skipped and why | Every `skipped` entry from Step 2, verbatim reason |
 
 If Step 2 failed outright, this table is not the report. Say plainly that selection failed,
@@ -146,3 +204,6 @@ Then stop. Merging the night's PRs is a morning decision, made by a human lookin
 | "The skip reasons are noise in the summary" | They are the tuning data for the next batch. Report all of them. |
 | "csw-batch-filter printed nothing, must mean no tickets were eligible" | Check the exit code first. Non-zero means selection failed — report the failure, don't dispatch nothing and call it a quiet night. |
 | "They said cap it at 6 tonight, I'll pass that through" | The override can only lower the cap. `batch.maxTickets` is the ceiling; ignore anything at or above it, and say so. |
+| "Over the cap is skipped, same table" | Different questions. `skipped` is why a ticket must not run; `belowCap` is what a bigger cap would have picked up. Merged, neither is answerable. |
+| "A dry run may as well make the worktrees, they're cheap" | A dry run has no side effects at all. No branches, no worktrees, no ticket state changes — that is the only reason it is safe to run before anything is decided. |
+| "The dry run found nothing, quiet night" | Check whether selection *failed*. Three empty groups mean nothing was eligible; a non-zero exit means nothing was evaluated. |
