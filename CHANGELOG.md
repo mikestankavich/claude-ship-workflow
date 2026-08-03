@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-08-03
+
+### Fixed
+- `csw-sweep` missed branches merged into the base branch's **upstream** when the local base
+  was behind it — the normal state on a machine where PRs are merged on the forge rather than
+  locally, and precisely the staleness the sweep exists to catch. The merged set is now the
+  union of `<base>` and `<base>@{upstream}`. No fetch: it reads only the remote-tracking ref
+  already on disk.
+- `csw-sweep` hid a merged branch when it was the one checked out, which silenced it about the
+  single branch a human is most likely to care about. It is now reported like any other,
+  annotated with the base branch to land on first — `git branch -d` refuses the checked-out
+  branch.
+
+### Changed
+- `csw-sweep`'s report leads with a note when the local base is behind its upstream, so a
+  quiet sweep is distinguishable from a stale one.
+- **`csw-sweep branches` output contract:** a listed branch is no longer guaranteed deletable
+  with `git branch -d` from where the caller stands. Git refuses loudly and harmlessly, which
+  beats the previous silent omission.
+- `csw-sweep worktrees` no longer lists the main working tree. `git worktree remove` refuses
+  it outright, so offering it as a removable leftover was an action that could not succeed.
+  Its branch still appears in `csw-sweep branches`.
+- `/csw:cleanup` handles a swept branch that is the current branch — land on the base, pull,
+  then delete — and states its end condition explicitly: it finishes on the base branch,
+  current with its remote.
+
 ## [1.0.0] - 2026-08-02
 
 CSW is now Claude **Ship** Workflow. Complete rewrite: superpowers owns how the work gets
