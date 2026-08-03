@@ -136,6 +136,42 @@ A stale worktree that `csw-sweep` lists but `git worktree remove` refuses to del
 known rough edge at the worktree-plus-shipped intersection. Report it plainly rather than
 forcing it.
 
+### The branch you are standing on
+
+The sweep reports a merged branch even when it is the one currently checked out, marking it
+`(current branch — check out <base> first, then delete)`. On the normal chained path this
+never fires: Steps 2–3 already landed on the base branch and deleted the branch this run was
+about. It fires when cleanup is invoked in a plain checkout that is simply sitting on work
+that already shipped.
+
+`git branch -d` refuses the checked-out branch, so — once it is approved along with the rest
+of the sweep — land first, then delete:
+
+```bash
+git checkout "<baseBranch>"
+git pull
+git branch -d "<the current branch the sweep flagged>"
+```
+
+That is the same land-then-delete Step 2 and Step 3 do, applied to a branch this run did not
+open. The approval rule above is unchanged: it is still swept work, so it is still proposed
+and waited on, never deleted on sight.
+
+## Step 4a: End on the base branch
+
+Cleanup finishes on the base branch, current with its remote, with nothing merged left lying
+around. That is the whole point of the exercise — the next piece of work starts from a clean
+checkout in a fresh session, with no leftovers to trip over. Before moving to the tracker:
+
+```bash
+git branch --show-current      # must be <baseBranch>
+git status -sb                 # must be clean, and not behind
+```
+
+If either says otherwise, say so explicitly rather than letting the session end somewhere
+unexpected. Being left on a deleted branch's detached HEAD, or on a base branch three commits
+behind its remote, is exactly the state that silently backdates the next branch cut from it.
+
 ## Step 5: The tracker, last
 
 Report the ticket's current state. If the PR body said `Closes <TICKET>`, the tracker may
@@ -163,6 +199,9 @@ is clean, even when it is obvious. Propose it, name what you would set it to, an
 | "The ticket is clearly done, I'll close it" | Always ask. Every time. |
 | "The sweep is empty, nothing to report" | Report the empty sweep. Silence reads as "not checked". |
 | "`csw-sweep` printed nothing, so there's nothing stale" | Check the exit code. Non-zero means the sweep did not run — unknown is not the same as absent. |
+| "The sweep flagged the branch I'm on, so it must be confused" | It is not. Land on the base branch, then delete it. Standing on shipped work is the ordinary case, not an anomaly. |
+| "`git branch -d` refused the current branch, so I'll leave it" | Refusing the *checked-out* branch is not the unmerged-commits refusal. Check out the base first, then delete. |
+| "Cleanup is done, wherever the checkout happens to be" | It ends on the base branch, current with its remote. Anything else backdates the next branch cut from it. |
 | "That other worktree is obviously stale too" | List it, ask, then act. |
 | "`git branch -d` refused, I'll use -D" | Refusal means unmerged commits. Investigate. |
 | "Uncommitted changes in the worktree are just scratch" | Show them first. That call is not yours. |

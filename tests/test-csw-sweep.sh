@@ -31,11 +31,22 @@ case "$branches" in
   *) PASSES=$((PASSES + 1)) ;;
 esac
 
-# The current branch is never swept, even when it is merged.
+# The current branch IS swept when it is merged. Standing on a branch that has
+# already shipped is the single case a human is most likely to care about, and
+# hiding it made the sweep silent about the obvious.
 git checkout -q feat/merged
-assert_eq "$("$BIN/csw-sweep" branches | grep -c 'feat/merged' || true)" "0" \
-  "current branch is never swept"
+assert_eq "$("$BIN/csw-sweep" branches | grep -c '^feat/merged$' || true)" "1" \
+  "a merged current branch is swept, not hidden"
+# ...and the report says what to do about it, since `git branch -d` refuses the
+# checked-out branch.
+cur_report=$("$BIN/csw-sweep")
+assert_contains "$cur_report" "current branch" "the report flags the current branch"
+assert_contains "$cur_report" "check out main first" \
+  "the report says to land on the base branch before deleting it"
+# The base branch is still never swept, even while standing on it.
 git checkout -q main
+assert_eq "$("$BIN/csw-sweep" branches | grep -c '^main$' || true)" "0" \
+  "the base branch is never swept, even as the current branch"
 
 # A worktree holding a merged branch shows up; one holding unmerged work does not.
 git worktree add -q "$repo/.claude/worktrees/merged" feat/merged
@@ -46,38 +57,61 @@ assert_contains "$worktrees" "worktrees/merged" "worktree on a merged branch is 
 assert_eq "$(printf '%s' "$worktrees" | grep -c . || true)" "1" \
   "only the merged worktree is swept"
 
+# The main working tree is never listed as a stale worktree, even when it holds
+# a merged branch: `git worktree remove` refuses it outright, so listing it
+# offers an action that cannot succeed. The branch itself still reports.
+mainwt=$(make_repo)
+write_config "$mainwt" <<'JSON'
+{ "baseBranch": "main", "worktreeDir": ".claude/worktrees" }
+JSON
+(
+  cd "$mainwt" || exit 1
+  git checkout -q -b feat/shipped
+  printf 's\n' >s.txt
+  git add -A && git commit -qm "shipped work"
+  git checkout -q main
+  git merge -q --no-ff -m "merge feat/shipped" feat/shipped
+  git checkout -q feat/shipped
+)
+assert_contains "$(cd "$mainwt" && "$BIN/csw-sweep" branches)" "feat/shipped" \
+  "a merged branch held by the main working tree still reports as a branch"
+assert_eq "$(cd "$mainwt" && "$BIN/csw-sweep" worktrees)" "" \
+  "the main working tree is never listed as a removable stale worktree"
+
 # A clean repo sweeps to nothing, and still exits 0.
 clean=$(make_repo)
 assert_eq "$(cd "$clean" && "$BIN/csw-sweep" branches)" "" "clean repo has no branches to sweep"
 assert_contains "$(cd "$clean" && "$BIN/csw-sweep")" "nothing to sweep" "clean repo reports nothing to sweep"
 assert_status 0 "clean sweep exits 0" -- in_dir "$clean" "$BIN/csw-sweep"
 
-# A `.` in the current branch name must not act as a regex wildcard and
-# swallow an unrelated merged branch (feat/a.b as current used to hide
-# feat/aXb, because grep -vx treated the current branch as a pattern).
+# A `.` in the BASE branch name must not act as a regex wildcard and swallow an
+# unrelated merged branch: `release/1.x` as a BRE pattern also matches
+# `release/1Xx`, which would silently drop a genuinely stale branch from the
+# sweep. This is what keeps the `grep -Fvx "$BASE"` filter honest. (The same
+# hazard used to exist on a current-branch filter, which no longer exists —
+# a merged current branch is now reported like any other.)
 dotrepo=$(make_repo)
 write_config "$dotrepo" <<'JSON'
-{ "baseBranch": "main", "worktreeDir": ".claude/worktrees" }
+{ "baseBranch": "release/1.x", "worktreeDir": ".claude/worktrees" }
 JSON
 (
   cd "$dotrepo" || exit 1
-  git checkout -q -b feat/a.b
-  printf 'ab\n' >ab.txt
-  git add -A && git commit -qm "a.b work"
-  git checkout -q main
-  git merge -q --no-ff -m "merge feat/a.b" feat/a.b
-
-  git checkout -q -b feat/aXb
+  git checkout -q -b "release/1.x"
+  git checkout -q -b "release/1Xx"
   printf 'axb\n' >axb.txt
-  git add -A && git commit -qm "aXb work"
-  git checkout -q main
-  git merge -q --no-ff -m "merge feat/aXb" feat/aXb
-
-  git checkout -q feat/a.b
+  git add -A && git commit -qm "1Xx work"
+  git checkout -q "release/1.x"
+  git merge -q --no-ff -m "merge release/1Xx" "release/1Xx"
 )
 dot_branches=$(cd "$dotrepo" && "$BIN/csw-sweep" branches)
-assert_contains "$dot_branches" "feat/aXb" \
-  "a dot in the current branch name does not swallow an unrelated merged branch"
+assert_contains "$dot_branches" "release/1Xx" \
+  "a dot in the base branch name does not swallow an unrelated merged branch"
+case "$dot_branches" in
+  *"release/1.x"*)
+    assert_eq "dotted-base-swept" "not-swept" \
+      "a base branch containing a dot is still never swept" ;;
+  *) PASSES=$((PASSES + 1)) ;;
+esac
 
 # A branch name with a `+` (also special to regexes) round-trips correctly
 # through both `branches` and `worktrees`.
