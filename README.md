@@ -12,11 +12,20 @@ out*.
 ## The three phases
 
 ```
+/csw:prep ENG-1088          # optional: spec it, ask the questions, touch nothing
 /csw:work ENG-1088          # dispatch: worktree, autonomous implementation, PR, stop
   ... you review the diff ...
 go for merge                # merge: CI gate, merge commit, chains into cleanup
                             # cleanup: worktree gone, branches gone, sweep reported
 ```
+
+**Prep** is the optional pass in front of the dispatch. It reads the ticket, brainstorms it for
+the questions that would stop an unattended run, notes anything the ticket asserts that the
+codebase contradicts, and writes all of it to **one ticket comment** marked `**CSW prep**`. It
+opens no worktree, no branch and no PR, and leaves the ticket in Todo. Dispatch reads that
+comment back as part of the brief — answers in the thread are decisions, and questions still
+unanswered send the run to a draft PR instead of a guess. Without it the loop only learns after
+a failure, at the cost of one wasted dispatch per question.
 
 **Dispatch** reads the ticket, sets it In Progress, opens a worktree, runs the work
 autonomously test-first, validates, and opens a PR. Then it stops. Hold-for-review is a hard
@@ -59,6 +68,9 @@ not enough:
   most one per batch.
 - **Same-surface clusters.** Tickets that share related-issue links tend to land in each
   other's copy even when they touch different files. Highest priority per cluster.
+
+Prepped tickets dispatch better, but the loop does not require prep and does not skip tickets
+that lack it.
 
 Three or four tickets a night, not the whole column — the cap comes from review, not from the
 loop. Anything that does not reach merge-ready is left as a **draft** PR with a question on
@@ -112,6 +124,7 @@ A different project is a config file, not a fork. Full reference:
 
 | Command | Phase | Invocation |
 |---|---|---|
+| `/csw:prep <ticket>` | Before dispatch | Optional — spec only, no side effects |
 | `/csw:work <ticket>` | Dispatch | Command, or "work ENG-1088" |
 | `/csw:work <ticket> interactive` | Dispatch | Brainstorms first, then the same run |
 | `/csw:merge` | Merge | Usually natural language: "go for merge" |

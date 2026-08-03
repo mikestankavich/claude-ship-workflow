@@ -325,6 +325,12 @@ fi
 # goes over on its own.
 assert_contains "$(cat "$batch")" "the ticket reference and nothing else" \
   "batch: dispatches csw:work with no modifier, so no ticket can stop for answers"
+# Prep improves a dispatch but must not become a gate on one: a loop that skipped unprepped
+# tickets would turn an optional command into a required step for every ticket in the column.
+assert_contains "$(cat "$batch")" "Prepped tickets dispatch better" \
+  "batch: names prep as the thing that makes a dispatch land better"
+assert_contains "$(cat "$batch")" "does not skip unprepped" \
+  "batch: prep is a recommendation, never a filter"
 assert_contains "$(cat "$batch")" "A failed selection is never an empty selection" \
   "batch: a filter failure is reported distinctly from an empty batch"
 

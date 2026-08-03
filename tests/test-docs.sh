@@ -12,7 +12,7 @@ if grep -q "Claude Spec Workflow" "$readme"; then
 else
   PASSES=$((PASSES + 1))
 fi
-for phrase in "not yours" "unmaintained" "/csw:work" "/csw:merge" "/csw:cleanup" "/csw:batch"; do
+for phrase in "not yours" "unmaintained" "/csw:prep" "/csw:work" "/csw:merge" "/csw:cleanup" "/csw:batch"; do
   assert_contains "$(cat "$readme")" "$phrase" "README mentions $phrase"
 done
 # A batch's isolation is per ticket in both senses — its own worktree and its own context —
