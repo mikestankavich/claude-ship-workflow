@@ -102,6 +102,29 @@ else
   PASSES=$((PASSES + 1))
 fi
 
+# --- work: reading what csw:prep left behind ---
+#
+# Prep writes its spec and its open questions to a ticket comment. If Step 2 does not go and
+# read that comment, prep is a command that produces nothing anyone consumes.
+work_step2=$(sed -n '/^## Step 2/,/^## Step 3/p' "$work")
+assert_contains "$work_step2" '**CSW prep**' \
+  "work: Step 2 looks for the marker csw:prep writes"
+assert_contains "$work_step2" "comments" \
+  "work: Step 2 reads the ticket's comments, not only its description"
+# A question prep asked and a human answered is a settled decision. Re-opening it burns the
+# dispatch on a conversation that already happened.
+assert_contains "$work_step2" "is a decision" \
+  "work: an answered prep question is treated as settled, not re-litigated"
+# Unanswered questions are the signal prep exists to produce. Guessing past them is exactly
+# the wasted dispatch prep was added to avoid.
+assert_contains "$work_step2" "rather than guessing" \
+  "work: unanswered prep questions are not guessed past"
+assert_contains "$work_step2" "Step 9" \
+  "work: unanswered prep questions route to the draft path"
+work_red_flags=$(sed -n '/^## Red flags/,$p' "$work")
+assert_contains "$work_red_flags" "prep" \
+  "work: red flags catch a dispatch that ignores the prep comment"
+
 # --- work: the interactive modifier, and everything it does not change ---
 
 # The word has to be discoverable from the hint, or the only people who type it are the

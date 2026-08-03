@@ -65,6 +65,38 @@ Read it from the tracker named by `csw-config get tracker`:
 Read the **whole** description, not the title. Ordering constraints and "replace, do not
 delete" style requirements live in prose and are invisible to structured queries.
 
+### Then read what `csw:prep` left behind
+
+Fetch the ticket's **comments** as well as its description, and look for one prefixed
+`**CSW prep**`:
+
+```bash
+# tracker: github
+gh issue view <number> --comments
+```
+
+For `linear`, list the issue's comments through the Linear MCP tools.
+
+If there is one, it is part of the brief — a first-pass spec, the questions prep thought had
+to be answered before this could run unattended, and anything the ticket asserts that the
+codebase contradicts. Read the replies underneath it too, because that is where the answers
+are:
+
+- **A prep question that has since been answered in the thread is a decision.** Take it and
+  move on. Re-opening it spends the dispatch on a conversation that already happened, and the
+  answer in the thread outranks whatever the description said before it was asked.
+- **A prep question still unanswered is a strong signal this ticket is not ready to run
+  unattended.** Say which questions are still open and take Step 9's draft path,
+  rather than guessing at an answer and building on the guess. A guessed answer is not visible
+  as a guess in the diff — it looks like a decision someone made.
+
+The exception is an `interactive` run, where a human is present to answer: there, prep's open
+questions are the agenda for the Step 1 brainstorm rather than a reason to open a draft PR.
+Nobody to ask is what makes an unanswered question a blocker.
+
+No prep comment is not a problem. Prep is optional, and a ticket without one is dispatched
+exactly as it always was.
+
 ## Step 3: Infer the change type
 
 From the ticket's labels and language, pick one conventional-commit type:
@@ -207,6 +239,8 @@ are actually asking to be merged.
 | "It's 90% done, I'll open a normal PR and flag the gap" | Not merge-ready means draft. Step 9. |
 | "I'll create the worktree with git, it's faster" | Use EnterWorktree. Bypassing it strands state the harness cannot clean up. |
 | "The title tells me enough about the ticket" | Read the description. The ordering constraints are in the prose. |
+| "The description is the brief, I don't need the comments" | A `**CSW prep**` comment is part of the brief, and the answers under it are the decisions. |
+| "Prep's question is unanswered but I can infer the answer" | Then the diff carries a guess that looks like a decision. Step 9, draft. |
 | "No config file, I'll infer the validate command" | Ask. A wrong validate command means a green run that proves nothing. |
 | "They typed a word I don't recognise, I'll get on with the ticket" | An unrecognised modifier is a question, not noise. Name it back and ask. |
 | "It's interactive, so someone is watching — I can merge it" | `interactive` changes planning only. Step 8 is the same hard stop. |
