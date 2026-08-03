@@ -48,32 +48,7 @@ csw-config get baseBranch
 
 Capture all three now. Step 2 changes directory and Step 3 needs these values.
 
-## Step 2: Pull the base branch, then leave the worktree
-
-The pull comes first, from **inside** the worktree, while the worktree still exists. Step 1
-has already confirmed the PR is `MERGED`, so `origin/<baseBranch>` is guaranteed to carry the
-merge by the time this runs — but the *local* base branch does not, and anything that compares
-this branch against a stale local base will conclude that work already on the remote is
-unmerged.
-
-From inside a worktree, `git checkout <base>` and `git fetch origin <base>:<base>` are both
-refused: the main checkout holds that branch. What works is updating that other checkout in
-place:
-
-```bash
-main_checkout=$(git -C "$(git rev-parse --git-common-dir)/.." rev-parse --show-toplevel)
-git -C "$main_checkout" status --porcelain     # must be empty
-git -C "$main_checkout" pull
-```
-
-Guard it on that `status --porcelain`. If the main checkout is dirty, the pull can fail or
-conflict — skip it and say plainly that you did, rather than pulling over someone's
-uncommitted work. Likewise if the main checkout is not sitting on `<baseBranch>`: the pull
-updates whatever branch it is on, which is harmless but is not the base pull, so report that
-too. In every one of those cases a failed or skipped pull **must not block the cleanup**. What
-protects the work is the verification below, not this pull.
-
-### Leave the worktree
+## Step 2: Leave the worktree
 
 Use the native **ExitWorktree** tool if one exists — it owns removal for worktrees it
 created. Otherwise move to the main worktree root by hand:
@@ -95,11 +70,17 @@ Removing will discard this work permanently. Confirm with the user, then re-invo
 with discard_changes: true — or use action: "keep" to preserve the worktree.
 ```
 
-**Expect this. It is the ordinary case, not an anomaly** — cleanup always runs immediately
-after a forge-side merge, which is exactly when a branch's commits are on the remote and not
-yet anywhere the tool is looking. Neither reflex is acceptable: stalling on a warning you have
-not checked, or passing `discard_changes: true` because the PR is merged and the warning
-"must" be spurious. The second one eventually discards work that really was unmerged.
+**Expect this on every single cleanup.** The tool compares the branch against the worktree's
+**creation point** — the commit the base branch was on when the worktree was cut — and cleanup
+by definition runs after commits have been added since. So the warning **cannot be suppressed
+by anything cleanup does**. Pulling or fast-forwarding the base first does not help: that was
+measured directly, by moving the local base *ahead* of the branch head before exiting and
+watching the warning fire anyway. Do not re-run that experiment.
+
+Because it always fires, it carries no information on its own, and both reflexes it invites
+are wrong: stalling on a warning you have not checked, and passing `discard_changes: true`
+because the PR is merged so the warning "must" be spurious. The second one eventually discards
+work that really was unmerged.
 
 Prove it instead. The refused exit leaves you still inside the worktree, so this runs from
 right there — capture the branch head **before** exiting, because afterwards the branch may
