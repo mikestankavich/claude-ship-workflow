@@ -3286,7 +3286,10 @@ git commit -m "feat(skills): add csw:batch — the nightly loop over csw:work"
 
 The README rewrite, the config reference, a worked example, and this repo's own
 `.claude/csw.json` — which requires narrowing the `.gitignore` that currently swallows the
-whole `.claude/` directory.
+whole `.claude/` directory. A post-review fix round ("fix round 1") widened this task to
+also repair `CHANGELOG.md`'s pre-existing structural issues (they broke Task 14's
+release-notes extraction) and to correct `CONTRIBUTING.md`, which the original scope had
+left stale.
 
 **Files:**
 - Rewrite: `README.md`
@@ -3295,11 +3298,12 @@ whole `.claude/` directory.
 - Create: `.claude/csw.json`
 - Modify: `.gitignore`
 - Modify: `CHANGELOG.md`
+- Modify: `CONTRIBUTING.md`
 - Create: `tests/test-docs.sh`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
-`tests/test-docs.sh`:
+`tests/test-docs.sh` (final version, after fix round 1 — see Step 8 and Step 9):
 
 ```bash
 #!/usr/bin/env bash
@@ -3353,21 +3357,59 @@ assert_eq "$tracked" ".claude/csw.json" ".claude/csw.json is tracked, not gitign
 ignored=$(git -C "$REPO_ROOT" check-ignore .claude/worktrees 2>/dev/null || true)
 assert_eq "$ignored" ".claude/worktrees" ".claude/worktrees stays ignored"
 
-assert_contains "$(cat "$REPO_ROOT/CHANGELOG.md")" "1.0.0" "CHANGELOG has a 1.0.0 entry"
+changelog="$REPO_ROOT/CHANGELOG.md"
+
+assert_contains "$(cat "$changelog")" "## [1.0.0]" "CHANGELOG has a 1.0.0 entry"
+
+# At most one Unreleased section — two stray ones (one of them empty) previously
+# rode along into the middle of the file and would have leaked into the 1.0.0
+# release notes.
+unreleased_count=$(grep -c '^## \[Unreleased\]' "$changelog")
+assert_eq "$unreleased_count" "0" "CHANGELOG has no stray Unreleased sections"
+
+# Version headers must read newest-first, consistently, with no version out of
+# order (0.1.0 previously sorted above 0.4.0).
+versions=$(grep -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' "$changelog" | sed -E 's/^## \[//; s/\]$//')
+sorted_versions=$(printf '%s\n' "$versions" | sort -rV)
+assert_eq "$versions" "$sorted_versions" "CHANGELOG version headers are strictly descending"
+
+# The check that actually protects the release: Task 14 extracts the 1.0.0 notes
+# by slicing from the [1.0.0] header to the next version header. That slice must
+# contain exactly those two "## " lines — the 1.0.0 heading itself and the next
+# version's heading marking where the section ends — nothing stray in between.
+extraction=$(sed -n '/^## \[1.0.0\]/,/^## \[0.4.0\]/p' "$changelog")
+extraction_headers=$(printf '%s\n' "$extraction" | grep -c '^## ')
+assert_eq "$extraction_headers" "2" "Task 14's 1.0.0 extraction contains only the 1.0.0 section"
+
+# The reboot renamed the project; no repo-root markdown file may still call it by
+# the old name except CHANGELOG.md, which legitimately narrates that history.
+spec_leak=$(grep -l "Claude Spec Workflow" "$REPO_ROOT"/*.md 2>/dev/null | grep -vFx "$changelog" || true)
+assert_eq "$spec_leak" "" "no repo-root markdown file except CHANGELOG.md says Claude Spec Workflow"
 
 report
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+The CHANGELOG-structure and CONTRIBUTING.md assertions (everything from `changelog=...`
+onward, minus the original single `"1.0.0"` substring check) were added in fix round 1, once
+review caught that the original weak `assert_contains ... "1.0.0"` line could not detect a
+malformed changelog, and that `CONTRIBUTING.md` had been left out of the file list entirely
+despite still describing the retired v0.x workflow.
+
+- [x] **Step 2: Run it to verify it fails**
 
 ```bash
 bash tests/test-docs.sh
 ```
 
-Expected: FAIL — README still describes v0.4.0, `docs/configuration.md` and
-`examples/csw.json` do not exist, `.claude/` is gitignored wholesale.
+Expected (original scope): FAIL — README still describes v0.4.0, `docs/configuration.md`
+and `examples/csw.json` do not exist, `.claude/` is gitignored wholesale. Expected (fix
+round 1, re-run against the pre-fix `CHANGELOG.md` and `CONTRIBUTING.md`): the four new
+assertions fail — `CHANGELOG has no stray Unreleased sections` (2 found), `CHANGELOG version
+headers are strictly descending` (0.1.0 sorted above 0.4.0), `Task 14's 1.0.0 extraction
+contains only the 1.0.0 section` (5 headers, not 2), and `no repo-root markdown file except
+CHANGELOG.md says Claude Spec Workflow` (`CONTRIBUTING.md` matched).
 
-- [ ] **Step 3: Narrow the gitignore**
+- [x] **Step 3: Narrow the gitignore**
 
 Replace the `.claude/` line in `.gitignore` so the config can be committed while worktrees
 and local settings stay out:
@@ -3381,7 +3423,14 @@ and local settings stay out:
 *~
 
 # Claude Code — commit csw.json, ignore local state
-.claude/worktrees/
+#
+# No trailing slash on worktrees: `git check-ignore` cannot confirm a
+# directory-only ("foo/") pattern against a path that does not yet exist on
+# disk, and a freshly cloned checkout has no .claude/worktrees/ until a
+# worktree is actually created there. Dropping the trailing slash matches
+# the path regardless, at the cost of also matching a plain file named
+# exactly "worktrees" in that spot — a name nothing in this repo ever uses.
+.claude/worktrees
 .claude/settings.local.json
 .claude/data/
 
@@ -3396,6 +3445,14 @@ Thumbs.db
 .env.local
 ```
 
+Deviation from the original plan text: the `.claude/worktrees` line drops the trailing
+slash the plan originally specified (`.claude/worktrees/`). Verified directly: with the
+trailing slash, `git check-ignore .claude/worktrees` returns nothing (exit 1) in a checkout
+that has never actually created a `.claude/worktrees/` directory on disk, because git cannot
+confirm a directory-only pattern against a path it cannot see is a directory. Since this
+repo's own worktree had no such directory, both the manual verification command below and
+`tests/test-docs.sh`'s `.claude/worktrees stays ignored` assertion would otherwise fail.
+
 `.superpowers/` must stay ignored — it holds the execution scratch for this very plan, and
 un-ignoring it would commit the ledger and review packages into the release.
 
@@ -3405,7 +3462,7 @@ Verify before going further — an unignored worktree directory commits the whol
 git check-ignore .claude/worktrees && echo "worktrees still ignored"
 ```
 
-- [ ] **Step 4: Write `examples/csw.json`**
+- [x] **Step 4: Write `examples/csw.json`**
 
 ```json
 {
@@ -3433,7 +3490,7 @@ git check-ignore .claude/worktrees && echo "worktrees still ignored"
 }
 ```
 
-- [ ] **Step 5: Write `.claude/csw.json` for this repo**
+- [x] **Step 5: Write `.claude/csw.json` for this repo**
 
 ```json
 {
@@ -3455,7 +3512,14 @@ git check-ignore .claude/worktrees && echo "worktrees still ignored"
 No `ticketPrefix`: this repo uses GitHub issue numbers, so a bare `12` is ambiguous and
 `csw-ticket` correctly refuses it.
 
-- [ ] **Step 6: Write `docs/configuration.md`**
+- [x] **Step 6: Write `docs/configuration.md`**
+
+The default-value table was verified key-for-key against real `csw-config json` output in a
+scratch repo before committing; it needed no correction. Two sections beyond the original
+plan text were added because they document behaviour that was directly observed running the
+programs and that a user configuring against this file would need: "Ticket references"
+(what `ticketPrefix` and `csw-ticket` actually accept) and "Errors" (the real exit codes).
+Final version:
 
 ````markdown
 # Configuration
@@ -3486,6 +3550,18 @@ csw-config path          # which file it read, if any
 | `gates` | `[]` | Extra validation triggered by which files changed. See below. |
 | `batch.maxTickets` | `3` | Cap on a single `/csw:batch` run. |
 | `batch.singleWriterLabels` | `["migration"]` | Labels admitting at most one ticket per batch. |
+
+`csw-config json` prints the full merged object, defaults and all — the table above is a
+key-by-key reading of that same output, not a separate description.
+
+## Ticket references
+
+`ticketPrefix` must start with a letter and contain only letters and digits after that
+(`TRA`, `ENG`, `K8S` are all valid). `csw-ticket` accepts a bare number, a dashed reference
+(`tra-1088`, `K8S-42`), or an undashed one when the prefix is pure letters (`tra1088`). An
+undashed reference where the prefix itself contains digits (`k8s42`) is genuinely ambiguous
+about where the prefix ends and the ticket number begins, so it is rejected rather than
+guessed.
 
 ## Gates
 
@@ -3520,6 +3596,10 @@ Preview the gates a branch triggers:
 csw-gates main
 ```
 
+`gates` must be a JSON array of objects, each with both `when` and `run`; anything else
+(a non-array, a non-object entry, or an entry missing either key) is a configuration error,
+not a gate that is silently skipped.
+
 ## Priority ordering
 
 `/csw:batch` sorts by priority. With `tracker: linear`, Linear's own scale applies — `1` is
@@ -3542,9 +3622,26 @@ A full config, from the project this workflow grew out of:
   "batch": { "maxTickets": 3, "singleWriterLabels": ["migration"] }
 }
 ```
+
+See [examples/csw.json](../examples/csw.json) for the complete version, and this repo's own
+[.claude/csw.json](../.claude/csw.json) for a second, simpler worked example.
+
+## Errors
+
+`csw-config` and the tools built on it fail loudly rather than guess:
+
+| Exit | Meaning |
+|---|---|
+| `0` | Success. A key explicitly set to `null` prints `null` at exit `0` — that is different from the key being absent. |
+| `2` | Bad usage: an unknown subcommand, wrong argument count, or an unknown config key. |
+| `3` | Not inside a git repository. |
+| `4` | The config file is not valid JSON, or is valid JSON that is not a JSON object (an array, a string, a number). |
+
+`csw-gates` reuses exit `4` for a malformed `gates` value: not an array, an entry that is
+not an object, or an entry missing `when` or `run`.
 ````
 
-- [ ] **Step 7: Rewrite `README.md`**
+- [x] **Step 7: Rewrite `README.md`**
 
 ````markdown
 # Claude Ship Workflow
@@ -3645,10 +3742,10 @@ A different project is a config file, not a fork. Full reference:
 
 ## What happened to v0.x
 
-Versions through **v0.4.0** were *Claude **Spec** Workflow*: a bespoke
-`/csw:spec` → `/csw:plan` → `/csw:build` → `/csw:ship` framework with a bash CLI and a
-`spec/` tree checked into every target repo. Superpowers now does that job better, and
-running both produced two overlapping vocabularies and one half-retired framework.
+Versions through **v0.4.0** were *Claude **Spec** Workflow*: a bespoke spec → plan → build →
+ship command framework with a bash CLI and a `spec/` tree checked into every target repo.
+Superpowers now does that job better, and running both produced two overlapping
+vocabularies and one half-retired framework.
 
 **v0.4.0 is unmaintained, superseded, and wrong in places. Do not install it.** The tag
 exists as archaeology, not as an offer. There is no migration path: if you were using it,
@@ -3664,9 +3761,20 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Tests: `bash tests/run-tests.sh`.
 MIT — see [LICENSE](LICENSE).
 ````
 
-- [ ] **Step 8: Add the CHANGELOG entry**
+Deviation from the original plan text: the "What happened to v0.x" paragraph does not use
+the literal strings `/csw:spec`, `/csw:plan`, `/csw:build`, `/csw:ship` (the plan's original
+draft did, formatted as inline code with a leading `/csw:` namespace). `tests/test-docs.sh`
+(Step 1, written first per TDD) greps the whole README for those four literal substrings and
+fails if any appear anywhere in the file — not just "advertised" as live commands. Running
+the plan's original README text against that test produced `FAIL README still advertises
+/csw:spec` and three more like it. The paragraph was reworded to convey the same historical
+fact (spec → plan → build → ship, a bash CLI, a `spec/` tree) without the forbidden
+substrings; no information was lost.
 
-Insert directly beneath the CHANGELOG's top heading, above the existing `0.4.0` entry:
+- [x] **Step 8: Add the CHANGELOG entry, and repair the file's pre-existing structural issues**
+
+Original scope was to insert directly beneath the CHANGELOG's top heading, above the
+existing `0.4.0` entry:
 
 ```markdown
 ## [1.0.0] - 2026-08-02
@@ -3696,19 +3804,86 @@ done, CSW owns how it gets shipped and closed out.
 - Repository renamed to `claude-ship-workflow`.
 ```
 
-- [ ] **Step 9: Run the tests to verify they pass**
+This alone left the file structurally broken for `CHANGELOG.md`'s pre-existing history: two
+separate `## [Unreleased]` sections (one holding real, dated content about a now-superseded
+`/csw:cleanup` post-merge-housekeeping feature; one empty, sitting directly above `0.4.0`),
+and version headers not in chronological order (`0.1.0` sorted above `0.4.0`, `0.3.2`, etc.,
+because it had been inserted directly under the first `Unreleased` block instead of at the
+bottom). Task 14 slices the 1.0.0 release notes out of this file by range (`sed -n
+'/^## \[1.0.0\]/,/^## \[0.4.0\]/p'`), so both stray `Unreleased` sections and the misplaced
+`0.1.0` entry would have ridden along into the GitHub release. Fix round 1 (post-review)
+repaired this:
+
+- **Collapsed both `[Unreleased]` sections.** The first held three real, dated entries
+  (`/csw:cleanup` post-merge housekeeping — branch cleanup, remote pruning, issue status
+  check; Linear issue detection in PR body/comments; squash-merge support in
+  `extract_pr_from_commit()`). `git log` traced all three to commits on 2026-03-24 — the day
+  after `0.4.0` shipped (2026-03-23) — that never received their own version bump. Decision:
+  **dropped, not moved.** The feature they describe (the old bash-CLI `/csw:cleanup`, with
+  its own `extract_pr_from_commit()` implementation) is exactly what the reboot's `Removed`
+  section already retires — "the `csw` binary... old and new must not coexist" — and it has
+  been fully replaced by the reboot's `skills/cleanup/SKILL.md`. Provenance for the record:
+  commits `b05840a`, `9a4053a`, `b09d55d`, `f074f8f`, all 2026-03-24. The second
+  `[Unreleased]` section was empty (`_No unreleased changes._`) and was deleted outright.
+- **Reordered every version header newest-first**, moving `0.1.0` (2025-10-11, the oldest
+  release) from its stray position above `0.4.0` down to the very end, after `0.2.0`. Final
+  order: `1.0.0`, `0.4.0`, `0.3.2`, `0.3.1`, `0.3.0`, `0.2.2`, `0.2.0`, `0.1.0` — every
+  section's own body text was moved verbatim; nothing inside any individual version's entry
+  was edited.
+- Verified afterward: `sed -n '/^## \[1.0.0\]/,/^## \[0.4.0\]/p' CHANGELOG.md` yields exactly
+  27 lines — the full `1.0.0` section plus the bare `## [0.4.0]` header line marking where it
+  ends — with exactly 2 `^## ` header lines in the slice.
+
+- [x] **Step 9 (added in fix round 1): Correct `CONTRIBUTING.md`**
+
+`CONTRIBUTING.md` was listed as "kept" (not deleted) by the legacy-path cleanup earlier in
+the reboot, which meant "not deleted," not "left accurate." It still called the project
+"Claude Spec Workflow," linked `trakrf/claude-spec-workflow`, and walked contributors
+through the retired `/plan` → `/build` → `/check` → `/ship` command files, `commands/`
+directory hacking, and `presets/your-stack-name.md` — none of which exist in the reboot's
+tree. Corrected as a targeted pass, keeping the file's existing heading structure and voice:
+project name and every repository link updated to `mikestankavich/claude-ship-workflow`;
+the "Testing Your Changes" section replaced with cloning the actual repo and running `bash
+tests/run-tests.sh`; the "Hacking on CSW Commands" `@`-include section replaced with a
+"Hacking on CSW Skills" section describing the real `skills/<name>/SKILL.md` layout and that
+both skills and `bin/csw-*` tools need no build or reinstall step to test; and "Adding New
+Stack Presets" replaced with "Adding a Config Key or Gate," the closest real analog in the
+current architecture (edit `bin/csw-config`'s `DEFAULTS`, document it in
+`docs/configuration.md`, test it in `tests/test-csw-config.sh`). `CODE_OF_CONDUCT.md`'s
+`admin@trakrf.id` contact address was deliberately left untouched — where abuse reports go
+is the repo owner's call, not something to change as a side effect of a naming pass.
+
+A new assertion in `tests/test-docs.sh` guards this: no repo-root `*.md` file except
+`CHANGELOG.md` (which legitimately narrates the old name as history) may contain the string
+"Claude Spec Workflow".
+
+- [x] **Step 10: Run the tests to verify they pass**
 
 ```bash
 bash tests/run-tests.sh
 ```
 
-Expected: PASS across every test file.
+Expected: PASS across every test file. Also run (fix round 1 added `CONTRIBUTING.md` and the
+CHANGELOG-structure checks to the scope shellcheck and the suite both need to stay clean
+against):
 
-- [ ] **Step 10: Commit**
+```bash
+shellcheck --severity=warning tests/*.sh bin/csw-config bin/csw-ticket bin/csw-gates bin/csw-sweep
+```
+
+- [x] **Step 11: Commit**
+
+Original scope:
 
 ```bash
 git add -A
 git commit -m "docs: rewrite README for the reboot, add configuration reference and example config"
+```
+
+Fix round 1 landed as a second commit on top of it:
+
+```bash
+git commit -m "fix(docs): repair the CHANGELOG structure and retire stale project naming"
 ```
 
 ---

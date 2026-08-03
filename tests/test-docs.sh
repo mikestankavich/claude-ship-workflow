@@ -49,6 +49,33 @@ assert_eq "$tracked" ".claude/csw.json" ".claude/csw.json is tracked, not gitign
 ignored=$(git -C "$REPO_ROOT" check-ignore .claude/worktrees 2>/dev/null || true)
 assert_eq "$ignored" ".claude/worktrees" ".claude/worktrees stays ignored"
 
-assert_contains "$(cat "$REPO_ROOT/CHANGELOG.md")" "1.0.0" "CHANGELOG has a 1.0.0 entry"
+changelog="$REPO_ROOT/CHANGELOG.md"
+
+assert_contains "$(cat "$changelog")" "## [1.0.0]" "CHANGELOG has a 1.0.0 entry"
+
+# At most one Unreleased section — two stray ones (one of them empty) previously
+# rode along into the middle of the file and would have leaked into the 1.0.0
+# release notes.
+unreleased_count=$(grep -c '^## \[Unreleased\]' "$changelog")
+assert_eq "$unreleased_count" "0" "CHANGELOG has no stray Unreleased sections"
+
+# Version headers must read newest-first, consistently, with no version out of
+# order (0.1.0 previously sorted above 0.4.0).
+versions=$(grep -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' "$changelog" | sed -E 's/^## \[//; s/\]$//')
+sorted_versions=$(printf '%s\n' "$versions" | sort -rV)
+assert_eq "$versions" "$sorted_versions" "CHANGELOG version headers are strictly descending"
+
+# The check that actually protects the release: Task 14 extracts the 1.0.0 notes
+# by slicing from the [1.0.0] header to the next version header. That slice must
+# contain exactly those two "## " lines — the 1.0.0 heading itself and the next
+# version's heading marking where the section ends — nothing stray in between.
+extraction=$(sed -n '/^## \[1.0.0\]/,/^## \[0.4.0\]/p' "$changelog")
+extraction_headers=$(printf '%s\n' "$extraction" | grep -c '^## ')
+assert_eq "$extraction_headers" "2" "Task 14's 1.0.0 extraction contains only the 1.0.0 section"
+
+# The reboot renamed the project; no repo-root markdown file may still call it by
+# the old name except CHANGELOG.md, which legitimately narrates that history.
+spec_leak=$(grep -l "Claude Spec Workflow" "$REPO_ROOT"/*.md 2>/dev/null | grep -vFx "$changelog" || true)
+assert_eq "$spec_leak" "" "no repo-root markdown file except CHANGELOG.md says Claude Spec Workflow"
 
 report

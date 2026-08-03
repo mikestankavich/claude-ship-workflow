@@ -1,135 +1,88 @@
-# Contributing to Claude Spec Workflow
+# Contributing to Claude Ship Workflow
 
-Thank you for your interest in contributing! This project is an evolving methodology based on real-world usage, and we welcome improvements and feedback.
+Thank you for your interest in contributing! This project is one person's idiosyncratic
+ticket-to-merged-PR workflow, packaged as a Claude Code plugin, and we welcome improvements
+and feedback.
 
 ## Ways to Contribute
 
 ### 1. Report Issues
-- Found a bug? [Open an issue](https://github.com/trakrf/claude-spec-workflow/issues)
+- Found a bug? [Open an issue](https://github.com/mikestankavich/claude-ship-workflow/issues)
 - Have a feature request? Describe your use case
 - Documentation unclear? Let us know what's confusing
 
 ### 2. Submit Pull Requests
 - Fix bugs or typos
-- Add new stack presets
+- Improve a `bin/csw-*` tool or a `skills/` skill
 - Improve documentation
-- Enhance commands with better error handling
+- Enhance skills or tools with better error handling
 
 ### 3. Share Your Experience
 - How are you using the workflow?
 - What works well? What doesn't?
-- Share your custom presets or workflows
+- Share your `.claude/csw.json` configuration or workflow tweaks
 
 ## Development Setup
 
 ### Prerequisites
-- Git
-- Bash (Git Bash on Windows, native on macOS/Linux)
-- Claude Code installed
+- Git 2.30+
+- `gh` 2.x, authenticated
+- `jq` 1.6+
+- `python3` 3.9+ (for `/csw:batch`)
+- Claude Code installed; [Superpowers](https://github.com/obra/superpowers) recommended
 
 **Windows developers**: Use Git Bash or WSL2 for development and testing.
 
 ### Testing Your Changes
 
-1. **Clone and test installation**
+1. **Clone and run the test suite**
    ```bash
-   git clone https://github.com/trakrf/claude-spec-workflow
-   cd claude-spec-workflow
-   ./csw install
+   git clone https://github.com/mikestankavich/claude-ship-workflow
+   cd claude-ship-workflow
+   bash tests/run-tests.sh
    ```
 
    **Windows**: Run in Git Bash or WSL2 terminal.
 
-2. **Test with a sample project**
-   ```bash
-   mkdir /tmp/test-project
-   cd /tmp/test-project
-   git init
+2. **Test the plugin end-to-end**
 
-   # Initialize with spec workflow (includes stack preset)
-   csw init . typescript-react-vite
+   Install it as a local plugin in a scratch repository with a `.claude/csw.json`, then
+   exercise the skills directly: `/csw:work <ticket>`, "go for merge", "clean up the
+   worktree", `/csw:batch`.
 
-   # Create a test spec
-   mkdir -p spec/active/test-feature
-   cp spec/template.md spec/active/test-feature/spec.md
-   ```
+3. **Add or extend tests before changing behavior**
 
-3. **Test commands manually**
-   - Edit the spec with a simple feature
-   - Run `/plan spec/active/test-feature/spec.md`
-   - Verify the plan is generated correctly
-   - Test other commands as applicable
+   Every bash tool under `bin/` has a matching `tests/test-<name>.sh`. `tests/run-tests.sh`
+   runs every `tests/test-*.sh` file and fails the suite if any of them fail.
 
-4. **After merging command changes**
+## Hacking on CSW Skills
 
-   If you modify files in `commands/` (slash command prompts):
+Skills are plain markdown under `skills/<name>/SKILL.md` (`work`, `merge`, `cleanup`,
+`batch`). Edit them directly — there is no build or install step for skill content while
+testing this repo's own checkout. Test a change by invoking the skill in a scratch
+repository (`/csw:work TEST-1`, "go for merge", "clean up the worktree", `/csw:batch`) and
+reading the transcript for whether it followed the updated instructions.
 
-   ```bash
-   # Re-run install to update global commands
-   csw install
+The `bin/csw-*` tools are separate: they are plain executables (four bash, one Python), so
+changes there take effect immediately with no reinstall step either — run them straight from
+`bin/` or through the test suite.
 
-   # Restart Claude Code to pick up changes
-   # (Command palette > "Reload Window" or restart application)
-   ```
-
-   **Why**: Slash commands (`/plan`, `/build`, `/ship`, etc.) are installed globally in Claude's commands directory. Changes only take effect after reinstalling and restarting Claude Code.
-
-## Hacking on CSW Commands
-
-For rapid iteration on command prompts without install/restart cycles:
-
-### Development Workflow (Instant Feedback)
-
-Use `@` includes instead of `/` slash commands during development:
-
-```markdown
-# In Claude Code - instant, no restart needed!
-@commands/plan.md spec/my-feature/spec.md
-@commands/build.md
-@commands/check.md
-```
-
-**Benefits**:
-- ✅ Zero installation needed
-- ✅ NO restart required (@ includes read on-demand)
-- ✅ Changes visible immediately after edit
-- ✅ Faster iteration loop
-
-**How it works**: Claude Code's `@` syntax includes files on-demand from your project directory, bypassing the global commands cache. Commands are just markdown files, so they work perfectly as includes.
-
-### Production Testing
-
-Once satisfied with changes, test as users will see it:
-
-```bash
-csw install
-# Restart Claude Code (Command palette > "Reload Window")
-/plan spec/my-feature/spec.md  # Test with slash command syntax
-```
-
-### Workflow Pattern
-
-1. **Iterate fast**: Edit `commands/plan.md` → run `@commands/plan.md` (repeat)
-2. **Test as user**: `csw install` → restart → `/plan`
-3. **Commit**: Changes validated in both modes
-
-**Tip**: Keep a scratch conversation open for `@commands/...` testing to avoid polluting your main work context.
-
-See TESTING.md for comprehensive test procedures.
+See [docs/design.md](docs/design.md) for the rationale behind the current shape of the
+skills and tools.
 
 ## Contribution Guidelines
 
 ### Code Style
-- **Shell scripts**: Follow [Google Shell Style Guide](https://google.github.io/styleguide/shellguide.html)
+- **Shell scripts**: Follow the [Google Shell Style Guide](https://google.github.io/styleguide/shellguide.html); `shellcheck --severity=warning` must be clean on every bash tool under `bin/` and every file under `tests/`.
 - **Markdown**: Use consistent formatting, clear headings
-- **Commands**: Keep prompts clear, concise, and actionable
+- **Skills**: Keep instructions clear, concise, and actionable
 
 ### Commit Messages
 Follow [Conventional Commits](https://www.conventionalcommits.org/):
 ```
-feat: add Rust stack preset
-fix: correct symlink handling in install.sh
-docs: clarify monorepo workspace detection
+feat: add priority tie-break to csw-batch-filter
+fix: correct branch pattern token substitution
+docs: clarify gate glob semantics
 chore: update dependencies
 ```
 
@@ -147,8 +100,9 @@ chore: update dependencies
    - Add examples if introducing new features
 
 4. **Test thoroughly**
+   - Run `bash tests/run-tests.sh` and confirm every test file passes
    - Test on both Unix and Windows if applicable
-   - Verify commands work end-to-end
+   - Verify skills and `bin/csw-*` tools work end-to-end
    - Check for broken links in documentation
 
 5. **Submit PR**
@@ -161,20 +115,16 @@ chore: update dependencies
    - Be open to suggestions
    - Ask questions if anything is unclear
 
-## Adding New Stack Presets
+## Adding a Config Key or Gate
 
-New presets are always welcome! Follow this structure:
+New `.claude/csw.json` keys are always welcome when they earn their keep. Follow this
+structure:
 
-1. **Create preset file**: `presets/your-stack-name.md`
-2. **Include all sections**:
-   - Project Type
-   - Validation Commands
-   - Code Quality Checks
-   - Git Workflow
-   - File Patterns
-3. **Test with real project**: Verify all commands work
-4. **Update README**: Add preset to "Available Presets" section
-5. **Add example**: Consider adding an example spec
+1. **Add the key and its default**: `DEFAULTS` in `bin/csw-config`
+2. **Wire it up**: wherever the tool or skill that reads it needs to change
+3. **Document it**: `docs/configuration.md`'s key table, including its default
+4. **Test it**: extend `tests/test-csw-config.sh` (or the relevant tool's test file) to
+   cover the new key, including a malformed-value case if one is plausible
 
 ## Documentation Improvements
 
@@ -182,11 +132,12 @@ Documentation is critical for this project:
 - **Clarity**: Use simple, direct language
 - **Examples**: Show real-world usage
 - **Completeness**: Cover edge cases and gotchas
-- **Accuracy**: Keep in sync with code changes
+- **Accuracy**: Keep in sync with code changes — every documented command or example
+  should be something you actually ran, not something that looks plausible
 
 ## Questions?
 
-- Open a discussion in [GitHub Issues](https://github.com/trakrf/claude-spec-workflow/issues)
+- Open a discussion in [GitHub Issues](https://github.com/mikestankavich/claude-ship-workflow/issues)
 - Check existing issues for similar questions
 - Be patient - this is a community-driven project
 
@@ -203,4 +154,4 @@ By contributing, you agree that your contributions will be licensed under the MI
 
 ---
 
-Thank you for helping make Claude Spec Workflow better! 🚀
+Thank you for helping make Claude Ship Workflow better! 🚀
