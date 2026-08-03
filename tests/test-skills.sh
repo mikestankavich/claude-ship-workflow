@@ -129,6 +129,18 @@ assert_contains "$(cat "$batch")" "csw-batch-filter" "batch: delegates selection
 assert_contains "$(cat "$batch")" "csw:work" "batch: dispatches through the work skill"
 assert_contains "$(cat "$batch")" "--draft" "batch: blocked work becomes a draft PR"
 assert_contains "$(cat "$batch")" "Morning summary" "batch: reports a morning summary"
-assert_contains "$(cat "$batch")" "backfill" "batch: warns about the blocking-relation prerequisite"
+# Case-insensitive: the prerequisite reads naturally as a sentence-initial "Backfill", and a
+# case-sensitive check here is exactly the kind of assertion that breaks the day someone
+# "corrects" the capitalisation back to what reads naturally in prose.
+if grep -qi "backfill" "$batch"; then
+  PASSES=$((PASSES + 1))
+else
+  FAILURES=$((FAILURES + 1))
+  printf 'FAIL batch: warns about the blocking-relation prerequisite\n' >&2
+fi
+assert_contains "$(cat "$batch")" "A failed selection is never an empty selection" \
+  "batch: a filter failure is reported distinctly from an empty batch"
+assert_contains "$(cat "$batch")" "can only lower tonight's cap, never raise it" \
+  "batch: the cap override is documented as lower-only"
 
 report

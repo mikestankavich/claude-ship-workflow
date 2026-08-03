@@ -17,7 +17,7 @@ This loop's first filter is "drop blocked tickets," and it only works if the tra
 what blocks what. If `blockedBy` is empty on most tickets while `relatedTo` carries three or
 four links each, the dependency information exists but is in the wrong field and in prose.
 
-**backfill blocking relations on the Todo column before relying on this.** Check a sample
+**Backfill blocking relations on the Todo column before relying on this.** Check a sample
 first, and if `blockedBy` is empty across the board, say so and stop rather than dispatching
 a batch whose ordering constraints are invisible.
 
@@ -61,10 +61,27 @@ review: preview environments merge every open non-draft PR together, so the morn
 tests the *combination*. Past three or four, a bug found there cannot be attributed without
 bisecting, and the review gate is what this whole design rests on.
 
+**If `csw-batch-filter` exits non-zero, the batch does not run.** Report its stderr message
+verbatim, say plainly that selection failed and no tickets were dispatched, and stop — do not
+continue to Step 3. A failed selection is never an empty selection: a malformed ticket, a bad
+`priority` type, a duplicate id, or a negative configured cap all exit non-zero with no usable
+`selected`/`skipped` on stdout, and none of them mean "nothing eligible tonight."
+
+The optional cap override — $ARGUMENTS — can only lower tonight's cap, never raise it: the
+configured `batch.maxTickets` is a safety ceiling, not a default to override upward. Apply it
+after the filter returns. If $ARGUMENTS is a positive integer smaller than the length of
+`selected`, keep only its first that many entries — `selected` is already in dispatch order —
+and move the rest into the skip list with reason `batch cap override (<n>)`. If $ARGUMENTS is
+absent, not a positive integer, or greater than or equal to the configured cap, ignore it, say
+so, and dispatch the filter's own `selected` unchanged. Never guess at what a malformed
+override meant.
+
 ## Step 3: Confirm the selection
 
 Show `selected` and every `skipped` entry with its reason, then wait for a go-ahead. This is
-the last human checkpoint before an unattended night.
+the last human checkpoint before an unattended night — once given, Steps 4 through 6 run
+straight through with no further prompting and no further confirmation, until the morning
+summary reports what happened.
 
 ## Step 4: Dispatch each, in order
 
@@ -103,6 +120,11 @@ Report, so the night does not have to be reconstructed by hand across the tracke
 | Blocked with questions | Ticket, the question asked, the draft PR |
 | Skipped and why | Every `skipped` entry from Step 2, verbatim reason |
 
+If Step 2 failed outright, this table is not the report. Say plainly that selection failed,
+quote the filter's message, and that nothing was evaluated or dispatched — never fold a
+failed run into an empty Dispatched/Skipped table, which is reserved for a night where
+candidates existed and were legitimately skipped.
+
 Then stop. Merging the night's PRs is a morning decision, made by a human looking at diffs.
 
 ## Red flags
@@ -115,3 +137,5 @@ Then stop. Merging the night's PRs is a morning decision, made by a human lookin
 | "This one's blocked, I'll open a normal PR and note it" | Draft. Always draft. Preview merges non-draft PRs. |
 | "I'll merge the PRs that clearly passed" | The morning review is the gate. Do not pre-empt it. |
 | "The skip reasons are noise in the summary" | They are the tuning data for the next batch. Report all of them. |
+| "csw-batch-filter printed nothing, must mean no tickets were eligible" | Check the exit code first. Non-zero means selection failed — report the failure, don't dispatch nothing and call it a quiet night. |
+| "They said cap it at 6 tonight, I'll pass that through" | The override can only lower the cap. `batch.maxTickets` is the ceiling; ignore anything at or above it, and say so. |

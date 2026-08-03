@@ -3083,7 +3083,19 @@ assert_contains "$(cat "$batch")" "csw-batch-filter" "batch: delegates selection
 assert_contains "$(cat "$batch")" "csw:work" "batch: dispatches through the work skill"
 assert_contains "$(cat "$batch")" "--draft" "batch: blocked work becomes a draft PR"
 assert_contains "$(cat "$batch")" "Morning summary" "batch: reports a morning summary"
-assert_contains "$(cat "$batch")" "backfill" "batch: warns about the blocking-relation prerequisite"
+# Case-insensitive: the prerequisite reads naturally as a sentence-initial "Backfill", and a
+# case-sensitive check here is exactly the kind of assertion that breaks the day someone
+# "corrects" the capitalisation back to what reads naturally in prose.
+if grep -qi "backfill" "$batch"; then
+  PASSES=$((PASSES + 1))
+else
+  FAILURES=$((FAILURES + 1))
+  printf 'FAIL batch: warns about the blocking-relation prerequisite\n' >&2
+fi
+assert_contains "$(cat "$batch")" "A failed selection is never an empty selection" \
+  "batch: a filter failure is reported distinctly from an empty batch"
+assert_contains "$(cat "$batch")" "can only lower tonight's cap, never raise it" \
+  "batch: the cap override is documented as lower-only"
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -3092,7 +3104,9 @@ assert_contains "$(cat "$batch")" "backfill" "batch: warns about the blocking-re
 bash tests/test-skills.sh
 ```
 
-Expected: FAIL — `batch: never model-invoked` and the rest.
+Expected: FAIL — `batch: never model-invoked` and the rest, `47 passed, 8 failed` (47 from the
+`work`, `merge`, and `cleanup` assertions already in place; all 8 new batch assertions fail
+because `skills/batch/SKILL.md` does not exist yet).
 
 - [ ] **Step 3: Write the skill**
 
@@ -3162,10 +3176,27 @@ review: preview environments merge every open non-draft PR together, so the morn
 tests the *combination*. Past three or four, a bug found there cannot be attributed without
 bisecting, and the review gate is what this whole design rests on.
 
+**If `csw-batch-filter` exits non-zero, the batch does not run.** Report its stderr message
+verbatim, say plainly that selection failed and no tickets were dispatched, and stop — do not
+continue to Step 3. A failed selection is never an empty selection: a malformed ticket, a bad
+`priority` type, a duplicate id, or a negative configured cap all exit non-zero with no usable
+`selected`/`skipped` on stdout, and none of them mean "nothing eligible tonight."
+
+The optional cap override — $ARGUMENTS — can only lower tonight's cap, never raise it: the
+configured `batch.maxTickets` is a safety ceiling, not a default to override upward. Apply it
+after the filter returns. If $ARGUMENTS is a positive integer smaller than the length of
+`selected`, keep only its first that many entries — `selected` is already in dispatch order —
+and move the rest into the skip list with reason `batch cap override (<n>)`. If $ARGUMENTS is
+absent, not a positive integer, or greater than or equal to the configured cap, ignore it, say
+so, and dispatch the filter's own `selected` unchanged. Never guess at what a malformed
+override meant.
+
 ## Step 3: Confirm the selection
 
 Show `selected` and every `skipped` entry with its reason, then wait for a go-ahead. This is
-the last human checkpoint before an unattended night.
+the last human checkpoint before an unattended night — once given, Steps 4 through 6 run
+straight through with no further prompting and no further confirmation, until the morning
+summary reports what happened.
 
 ## Step 4: Dispatch each, in order
 
@@ -3204,6 +3235,11 @@ Report, so the night does not have to be reconstructed by hand across the tracke
 | Blocked with questions | Ticket, the question asked, the draft PR |
 | Skipped and why | Every `skipped` entry from Step 2, verbatim reason |
 
+If Step 2 failed outright, this table is not the report. Say plainly that selection failed,
+quote the filter's message, and that nothing was evaluated or dispatched — never fold a
+failed run into an empty Dispatched/Skipped table, which is reserved for a night where
+candidates existed and were legitimately skipped.
+
 Then stop. Merging the night's PRs is a morning decision, made by a human looking at diffs.
 
 ## Red flags
@@ -3216,6 +3252,8 @@ Then stop. Merging the night's PRs is a morning decision, made by a human lookin
 | "This one's blocked, I'll open a normal PR and note it" | Draft. Always draft. Preview merges non-draft PRs. |
 | "I'll merge the PRs that clearly passed" | The morning review is the gate. Do not pre-empt it. |
 | "The skip reasons are noise in the summary" | They are the tuning data for the next batch. Report all of them. |
+| "csw-batch-filter printed nothing, must mean no tickets were eligible" | Check the exit code first. Non-zero means selection failed — report the failure, don't dispatch nothing and call it a quiet night. |
+| "They said cap it at 6 tonight, I'll pass that through" | The override can only lower the cap. `batch.maxTickets` is the ceiling; ignore anything at or above it, and say so. |
 ````
 
 - [ ] **Step 4: Run the test to verify it passes**
@@ -3224,7 +3262,7 @@ Then stop. Merging the night's PRs is a morning decision, made by a human lookin
 bash tests/run-tests.sh
 ```
 
-Expected: PASS across every test file.
+Expected: PASS across every test file. `test-skills.sh` reports `62 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 
