@@ -429,6 +429,14 @@ assert_contains "$(cat "$prep")" "the reasoning that made it a decision" \
 assert_contains "$(cat "$prep")" "_None._" \
   "prep: an empty open-questions section says so rather than disappearing"
 
+# Prep is run with the person who can answer sitting there — that is the design centre, not a
+# variant of it. Framed the other way round the skill defers every surviving question to a
+# comment someone reads tomorrow, which is the day of latency prep exists to remove.
+assert_contains "$(cat "$prep")" "Prep is an interactive command" \
+  "prep: the run with a human present is the norm, not the exception"
+assert_contains "$(cat "$prep")" "dispatchable" \
+  "prep: names the state a run has to leave the ticket in"
+
 # Recommending to a human who can reject it needs a human. Without one — a subagent, a column
 # of tickets prepped in one pass — the questions that survive triage stay open.
 assert_contains "$(cat "$prep")" "AskUserQuestion" \

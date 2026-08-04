@@ -20,6 +20,18 @@ Prep does not implement anything. It reads, it decides everything it can defend 
 recommendation for, it asks about the little that survives that test, and it writes one
 comment carrying all of it.
 
+**Prep is an interactive command**, and that is the design centre rather than a variant of it.
+The person who can answer typed the invocation and is sitting there for the whole run, so a
+run ends in one of two states, both of which leave the ticket **dispatchable**:
+
+- Every question that would block an autonomous build has an answer, recorded on the ticket in
+  the run that asked it.
+- There were none, and prep says so.
+
+The second is the common one and the one to aim for. A question left in a comment for someone
+to notice tomorrow is not a third state — it is the first state, deferred by a day, and that
+day is exactly what prep exists to remove.
+
 ## Step 0: Read the config
 
 ```bash
@@ -138,7 +150,7 @@ five that did not. A decision that should have been a question is written down i
 with its reasoning, where a human reads it and overturns it. **The comment is the safety
 mechanism, not the asking.**
 
-## Step 5: Ask, once, if anyone is there
+## Step 5: Ask, once, and get the answer in this run
 
 If nothing survived Step 4, this step is a no-op. That is the good outcome, not a sign the
 triage was too aggressive — go straight to Step 6.
@@ -148,16 +160,20 @@ each with the recommended option first where there is one. Take the answers; the
 decisions and are recorded as such in Step 6, in the same comment the questions were asked
 from.
 
-Someone typed `/csw:prep <ticket>` and is sitting right there. Proposing a recommendation to a
-human who can reject it is not the failure this command exists to prevent — leaving them to
-read six questions in a comment, answer them in chat, and have somebody copy the answers back
-by hand is.
+Ask them here, in the run. Someone typed `/csw:prep <ticket>` and is sitting right there:
+proposing a recommendation to a human who can reject it is not the failure this command exists
+to prevent — leaving them to read the questions in a comment, answer them in chat, and have
+somebody copy the answers back by hand is. A question that reaches the comment unanswered has
+cost the dispatch a day, and it was answerable in thirty seconds by the person who was in the
+room the whole time.
 
-**If nobody is there to answer, do not ask and do not guess.** Prep invoked from a subagent,
-or a column of tickets prepped in one pass, has no one in the room; the surviving questions
-stay open in the comment instead, which is the case prep was designed against and its original
-behaviour. Nobody to ask is what makes an unanswered question a blocker rather than a
-conversation.
+**If nobody is there to answer, do not ask and do not guess.** Prep invoked from a subagent, or
+a column of tickets prepped in one pass, has no one in the room; the surviving questions stay
+open in the comment instead and the ticket is not yet dispatchable. This is the degenerate
+case, not the shape prep is built around — say plainly, when you report, that the run ended
+with questions nobody was there to answer, because the fix is a human re-running it rather than
+a dispatch reading it. Nobody to ask is what makes an unanswered question a blocker rather than
+a conversation.
 
 ## Step 6: Write one comment
 
@@ -216,16 +232,19 @@ the guess as the brief, and nothing downstream catches it.
 
 ## Step 7: Stop
 
-Report what you wrote and stop.
+Report what you wrote and stop. Say which of the two end states the run reached: the ticket is
+dispatchable with nothing outstanding, or it is not and here is what is still open and why
+nobody answered it.
 
 **No worktree, no branch, no pull request, no validation run**, no commit, and no change to
 the ticket's state — it **stays in Todo** so the batch loop still picks it up. That is prep's
 whole contract, and it is the only reason it is safe to run against a column of tickets before
 anything about them has been decided.
 
-Do not continue into `csw:work`. Prep ending is the point at which a human reads the comment;
-implementing against it is not prep's job, and neither is starting the work while nobody has
-looked at what prep decided.
+Do not continue into `csw:work`. The human who answered the questions has seen the comment go
+by, not agreed to the work starting; deciding when a dispatchable ticket is dispatched is
+theirs, and prep going on to implement against its own spec removes the one review point
+between the brainstorm and a branch.
 
 ## Red flags
 
@@ -235,6 +254,7 @@ looked at what prep decided.
 | "I'm not fully certain, so I'll ask" | Then every ticket costs its prepper six answers and the two that mattered are buried. Recommend, record the reasoning, and move on. |
 | "There's a recommendation, but this feels important enough to confirm" | Important is not the test. Public contract, production data, cannot be walked back by editing a file — otherwise it is a decision. |
 | "Six questions means I was thorough" | It means triage did not run. A run that asks nothing and records six reasoned decisions is the better run. |
+| "I'll leave it open in the comment for them to read" | They are here now — that is what interactive means. A question deferred to the comment is the same answer, a day later. |
 | "I've read enough to just start it — I'll open the worktree" | Prep has no worktree. If it is ready to run, dispatch it with `csw:work`. |
 | "Set it In Progress so nobody double-prepares it" | Todo is what the batch loop pulls. Claiming it un-batches it. |
 | "The spec is the useful part, the rest is padding" | The decisions and the open questions are the product. The spec is context for them. |

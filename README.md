@@ -24,13 +24,16 @@ the questions that would stop an unattended run, and then **answers the ones it 
 answer to** — anything with a precedent in the codebase, a convention the repo follows, or a
 cheap reversal becomes a recorded decision with its reasoning rather than a question. The test
 is mechanical: if prep can mark an option "(Recommended)", it has its answer. What survives is
-put to you in one round, and usually that is nothing. All of it — the spec, the decisions, the
-open questions if any, and anything the ticket asserts that the codebase contradicts — lands in
-**one ticket comment** marked `**CSW prep**`. It opens no worktree, no branch and no PR, and
-leaves the ticket in Todo. Dispatch reads that comment back as part of the brief — decisions
-and answers in the thread are settled, and questions still unanswered send the run to a draft
-PR instead of a guess. Without it the loop only learns after a failure, at the cost of one
-wasted dispatch per question.
+put to you **in the run**, in one round — and usually that is nothing.
+
+Prep is interactive by design: you typed it and you are sitting there, so it ends either with
+every blocking question answered or with prep confirming there were none. Either way the ticket
+is dispatchable when it stops. All of it — the spec, the decisions, the open questions if any,
+and anything the ticket asserts that the codebase contradicts — lands in **one ticket comment**
+marked `**CSW prep**`. It opens no worktree, no branch and no PR, and leaves the ticket in Todo.
+Dispatch reads that comment back as part of the brief — decisions and answers in the thread are
+settled, and questions still unanswered send the run to a draft PR instead of a guess. Without
+it the loop only learns after a failure, at the cost of one wasted dispatch per question.
 
 **Dispatch** reads the ticket, sets it In Progress, opens a worktree, runs the work
 autonomously test-first, validates, and opens a PR. Then it stops. Hold-for-review is a hard
@@ -129,7 +132,7 @@ A different project is a config file, not a fork. Full reference:
 
 | Command | Phase | Invocation |
 |---|---|---|
-| `/csw:prep <ticket>` | Before dispatch | Optional — spec only, no side effects |
+| `/csw:prep <ticket>` | Before dispatch | Optional — interactive, spec only, no side effects |
 | `/csw:work <ticket>` | Dispatch | Command, or "work ENG-1088" |
 | `/csw:work <ticket> interactive` | Dispatch | Brainstorms first, then the same run |
 | `/csw:merge` | Merge | Usually natural language: "go for merge" |
