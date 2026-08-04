@@ -28,7 +28,7 @@ assert_eq "$(jq -r .license "$PLUGIN")" "MIT" "plugin license is MIT"
 assert_eq "$(jq -r '.dependencies // "absent"' "$PLUGIN")" "absent" "no hard dependencies declared"
 
 version_file=$(tr -d '[:space:]' <"$REPO_ROOT/VERSION")
-assert_eq "$version_file" "1.0.3" "VERSION is 1.0.3"
+assert_eq "$version_file" "1.1.0" "VERSION is 1.1.0"
 assert_eq "$(jq -r .version "$PLUGIN")" "$version_file" "plugin.json version matches VERSION"
 
 assert_eq "$(jq -r '.plugins | length' "$MARKET")" "1" "marketplace lists exactly one plugin"
