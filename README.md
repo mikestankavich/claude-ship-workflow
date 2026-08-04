@@ -12,7 +12,7 @@ out*.
 ## The three phases
 
 ```
-/csw:prep ENG-1088          # optional: spec it, ask the questions, touch nothing
+/csw:prep ENG-1088          # optional: spec it, settle what it can, touch nothing
 /csw:work ENG-1088          # dispatch: worktree, autonomous implementation, PR, stop
   ... you review the diff ...
 go for merge                # merge: CI gate, merge commit, chains into cleanup
@@ -20,12 +20,17 @@ go for merge                # merge: CI gate, merge commit, chains into cleanup
 ```
 
 **Prep** is the optional pass in front of the dispatch. It reads the ticket, brainstorms it for
-the questions that would stop an unattended run, notes anything the ticket asserts that the
-codebase contradicts, and writes all of it to **one ticket comment** marked `**CSW prep**`. It
-opens no worktree, no branch and no PR, and leaves the ticket in Todo. Dispatch reads that
-comment back as part of the brief — answers in the thread are decisions, and questions still
-unanswered send the run to a draft PR instead of a guess. Without it the loop only learns after
-a failure, at the cost of one wasted dispatch per question.
+the questions that would stop an unattended run, and then **answers the ones it can defend an
+answer to** — anything with a precedent in the codebase, a convention the repo follows, or a
+cheap reversal becomes a recorded decision with its reasoning rather than a question. The test
+is mechanical: if prep can mark an option "(Recommended)", it has its answer. What survives is
+put to you in one round, and usually that is nothing. All of it — the spec, the decisions, the
+open questions if any, and anything the ticket asserts that the codebase contradicts — lands in
+**one ticket comment** marked `**CSW prep**`. It opens no worktree, no branch and no PR, and
+leaves the ticket in Todo. Dispatch reads that comment back as part of the brief — decisions
+and answers in the thread are settled, and questions still unanswered send the run to a draft
+PR instead of a guess. Without it the loop only learns after a failure, at the cost of one
+wasted dispatch per question.
 
 **Dispatch** reads the ticket, sets it In Progress, opens a worktree, runs the work
 autonomously test-first, validates, and opens a PR. Then it stops. Hold-for-review is a hard

@@ -1,6 +1,6 @@
 ---
 name: prep
-description: Spec a ticket before it is dispatched. Brainstorms it for the questions that must be answered before it can run unattended, then leaves a first-pass spec as one ticket comment. No worktree, no branch, no pull request, and the ticket stays where it was.
+description: Spec a ticket before it is dispatched. Brainstorms it, decides everything it can recommend an answer for, asks a present human about the little that survives, and leaves the spec, the decisions and anything still open as one ticket comment. No worktree, no branch, no pull request, and the ticket stays where it was.
 when_to_use: "/csw:prep 1088", "prep ENG-1088", "spec ENG-1088 before tonight's batch", "is this ticket ready to dispatch?"
 argument-hint: "[ticket-ref]"
 ---
@@ -16,8 +16,9 @@ ticket, and the next dispatch starts from a better brief — so one wasted dispa
 of every question discovered. Prep moves that discovery in front of the dispatch, where it
 costs a comment instead of a night.
 
-Prep does not implement anything, and it does not decide anything a human should. It reads,
-it asks, and it writes one comment.
+Prep does not implement anything. It reads, it decides everything it can defend a
+recommendation for, it asks about the little that survives that test, and it writes one
+comment carrying all of it.
 
 ## Step 0: Read the config
 
@@ -63,8 +64,9 @@ pulls, which removes it from the very column prep exists to improve.
 Read the existing comments too, and read them before brainstorming rather than after. A
 question already asked and answered in the thread is a decision, not an open question, and
 re-asking it in the prep comment tells the next dispatch to go and re-litigate it. If a prior
-`**CSW prep**` comment is already there, this run supersedes it: say which questions it left
-unanswered and do not simply repeat the ones that have since been settled.
+`**CSW prep**` comment is already there, this run supersedes it: carry its decisions forward,
+say which of its questions are still open, and do not repeat the ones that have since been
+settled.
 
 ## Step 3: Brainstorm it, in surface-the-questions mode
 
@@ -83,16 +85,81 @@ has since moved is a dispatch that will spend its run discovering that.
 What to come out with:
 
 - **A first-pass spec.** What the change is, in the terms the codebase actually uses.
-- **The open questions** — specifically the ones that must be answered before this can run
+- **The candidate questions** — the ones that must be answered before this can run
   *unattended*. That is the bar. "Which of these two names is nicer" does not stop a dispatch;
-  "does this replace the existing path or sit alongside it" does.
+  "does this replace the existing path or sit alongside it" does. They are *candidates*: Step 4
+  decides which of them prep answers itself and which are worth a human's attention.
 - **Contradictions.** Anything the ticket asserts that the codebase contradicts, quoted from
   both sides so a human can adjudicate it without going and looking.
 
 If the superpowers skills are not installed, say so once and do the same work by hand. The
 skill is a strong recommendation, not a hard dependency.
 
-## Step 4: Write one comment
+## Step 4: Triage — decide what you can defend, keep only what you cannot
+
+Take every candidate from Step 3 and apply one mechanical test:
+
+> **If you can mark an option "(Recommended)", you have your answer.** Do not ask — decide,
+> and record the decision with the reasoning that made it one.
+
+That test is not a judgement call about how important the uncertainty feels. It is something
+prep can apply to itself: if you find yourself writing an option list whose first entry is the
+obvious one, that list is a decision you have not finished making. It comes from measurement —
+prep run over four tickets asked 4-6 questions on every one of them, and **every question that
+carried a recommendation was answered by taking the recommendation**, without exception. Those
+questions carried no information. They were a confirmation step wearing a question's clothing,
+and a human paid for it on every ticket.
+
+A recommendation is what a precedent gives you: something the codebase already does, a
+convention the repo already follows, or a choice that is cheap to reverse because reversing it
+means editing a file.
+
+Two branches survive, and everything else is a decision:
+
+1. **No recommendation can be formed.** Not enough clarity to pick means it is genuinely a
+   question. This is the common legitimate case, and it should still be rare.
+2. **The cost of being wrong is paid outside this repo.** Ask even holding a recommendation,
+   because the criterion here is blast radius rather than confidence: a released config key's
+   name, a public output contract, production data touched or migrated — anything that
+   **cannot be walked back by editing a file**. That is a named class of consequence, not a
+   feeling that something seems important, and it has to stay that narrow. Left vague it
+   reabsorbs everything branch one excluded and prep is back to six questions a ticket.
+
+**Question count is a quality signal, and it runs the opposite way to the obvious reading.** A
+run that asks nothing and records six reasoned decisions is a *better* run than one that asks
+six questions. Zero questions is the expected outcome, and frequently the right one; 0-2 is the
+range. Six on one ticket reads as prep failing to do its job, not as prep being thorough — and
+"surface the questions" pulls naturally towards surfacing all of them, which is exactly the
+failure this step exists to stop.
+
+The asymmetry is why the test is set this way round. A question that should have been a
+decision costs its prepper an answer on every ticket, and buries the one that mattered among
+five that did not. A decision that should have been a question is written down in the comment
+with its reasoning, where a human reads it and overturns it. **The comment is the safety
+mechanism, not the asking.**
+
+## Step 5: Ask, once, if anyone is there
+
+If nothing survived Step 4, this step is a no-op. That is the good outcome, not a sign the
+triage was too aggressive — go straight to Step 6.
+
+Otherwise, put the surviving questions to the human in **one round**, with **AskUserQuestion**,
+each with the recommended option first where there is one. Take the answers; they become
+decisions and are recorded as such in Step 6, in the same comment the questions were asked
+from.
+
+Someone typed `/csw:prep <ticket>` and is sitting right there. Proposing a recommendation to a
+human who can reject it is not the failure this command exists to prevent — leaving them to
+read six questions in a comment, answer them in chat, and have somebody copy the answers back
+by hand is.
+
+**If nobody is there to answer, do not ask and do not guess.** Prep invoked from a subagent,
+or a column of tickets prepped in one pass, has no one in the room; the surviving questions
+stay open in the comment instead, which is the case prep was designed against and its original
+behaviour. Nobody to ask is what makes an unanswered question a blocker rather than a
+conversation.
+
+## Step 6: Write one comment
 
 **One comment**, on the ticket, prefixed with the marker exactly:
 
@@ -112,9 +179,13 @@ The body:
 ## First-pass spec
 <what the change is, in the codebase's own terms>
 
+## Decisions
+1. <the choice, stated as settled> — <the reasoning that made it a decision rather than a
+   question: the precedent it follows, or why it is cheap to reverse>
+2. <a question Step 5 put to a human, and the answer they gave> — decided in this run.
+
 ## Open questions
-1. <a question that would stop an unattended dispatch>
-2. <another>
+_None._
 
 ## What the ticket asserts that the codebase contradicts
 - <claim> — <what is actually there, with the path>
@@ -124,15 +195,26 @@ The marker `**CSW prep**` is load-bearing and must be exact. `csw:work` Step 2 s
 comments for that string; a comment that says "Prep notes" instead is a comment nothing will
 ever read back.
 
-**One comment, not a thread.** Answers arrive as replies underneath it, and a human scanning
-the ticket has to be able to tell prep's questions from prep's own restatements of them. Three
-comments from prep means the answers interleave with the questions and nobody can tell which
-is which.
+**Every decision carries its reasoning.** A decision written down without the precedent behind
+it is indistinguishable from a guess, and a reader who cannot see why it was made cannot
+overturn it — which is the one safety mechanism the triage in Step 4 relies on.
 
-Leave the questions genuinely open. Prep answering its own questions is the failure this
-command exists to prevent — an unattended dispatch will then treat the guess as the brief.
+**An empty open-questions section says so.** Write `_None._` under the heading rather than
+dropping the heading, because "nothing left open" is a dispatchable signal and an absent
+section is not: a dispatch reading this back cannot tell a prep run that settled everything
+from a prep run that never got that far.
 
-## Step 5: Stop
+**One comment, not a thread.** Answers to anything still open arrive as replies underneath it,
+and a human scanning the ticket has to be able to tell prep's questions from prep's own
+restatements of them. Three comments from prep means the answers interleave with the questions
+and nobody can tell which is which — which is also why the answers Step 5 collected belong in
+this comment rather than a second one.
+
+Whatever survived Step 4 and had no human to answer it stays genuinely open. Prep answering
+those questions unattended is the failure this command exists to prevent — the dispatch treats
+the guess as the brief, and nothing downstream catches it.
+
+## Step 7: Stop
 
 Report what you wrote and stop.
 
@@ -141,17 +223,22 @@ the ticket's state — it **stays in Todo** so the batch loop still picks it up.
 whole contract, and it is the only reason it is safe to run against a column of tickets before
 anything about them has been decided.
 
-Do not continue into `csw:work`. Prep ending is the point at which a human reads the questions;
-answering them is not prep's job, and neither is starting the work while nobody has.
+Do not continue into `csw:work`. Prep ending is the point at which a human reads the comment;
+implementing against it is not prep's job, and neither is starting the work while nobody has
+looked at what prep decided.
 
 ## Red flags
 
 | Thought | Reality |
 |---|---|
-| "I know what they meant, I'll answer the question myself" | Then the dispatch inherits your guess as the brief. Leave it open. |
+| "I know what they meant, I'll answer the question myself" | With **nobody watching**, that guess becomes the brief and nothing downstream catches it. Recommending it to a present human who can reject it is a different act; writing it into the comment unattended is not. |
+| "I'm not fully certain, so I'll ask" | Then every ticket costs its prepper six answers and the two that mattered are buried. Recommend, record the reasoning, and move on. |
+| "There's a recommendation, but this feels important enough to confirm" | Important is not the test. Public contract, production data, cannot be walked back by editing a file — otherwise it is a decision. |
+| "Six questions means I was thorough" | It means triage did not run. A run that asks nothing and records six reasoned decisions is the better run. |
 | "I've read enough to just start it — I'll open the worktree" | Prep has no worktree. If it is ready to run, dispatch it with `csw:work`. |
 | "Set it In Progress so nobody double-prepares it" | Todo is what the batch loop pulls. Claiming it un-batches it. |
-| "The spec is the useful part, questions are padding" | The questions are the product. The spec is context for them. |
+| "The spec is the useful part, the rest is padding" | The decisions and the open questions are the product. The spec is context for them. |
+| "Nothing is open, so I'll drop the section" | `_None._` is a signal a dispatch reads. A missing section is silence. |
 | "One comment per question is easier to reply to" | One comment. Replies thread under it; multiple comments interleave with the answers. |
 | "The title plus the labels tell me enough" | Read the description. The constraints that break a dispatch are in the prose. |
 | "There's already a prep comment, nothing to do" | Re-read it against the thread. Prep again saying which of its questions are still open. |
