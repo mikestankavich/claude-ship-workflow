@@ -168,12 +168,22 @@ cost the dispatch a day, and it was answerable in thirty seconds by the person w
 room the whole time.
 
 **If nobody is there to answer, do not ask and do not guess.** Prep invoked from a subagent, or
-a column of tickets prepped in one pass, has no one in the room; the surviving questions stay
-open in the comment instead and the ticket is not yet dispatchable. This is the degenerate
-case, not the shape prep is built around — say plainly, when you report, that the run ended
-with questions nobody was there to answer, because the fix is a human re-running it rather than
-a dispatch reading it. Nobody to ask is what makes an unanswered question a blocker rather than
-a conversation.
+a column of tickets prepped by one unattended run, has no one in the room; the surviving
+questions stay open in the comment instead and the ticket is not yet dispatchable. This is the
+degenerate case, not the shape prep is built around — say plainly, when you report, that the
+run ended with questions nobody was there to answer, because the fix is a human re-running it
+rather than a dispatch reading it. Nobody to ask is what makes an unanswered question a blocker
+rather than a conversation.
+
+**Several prep sessions running at once is the interactive path, not that fallback.** Four
+sessions, four tickets, one human moving between them: you are present in every one, so every
+session asks and gets its answer normally. It parallelises safely because prep writes nothing
+to the repo and each session comments on a different ticket. What does collide is two sessions
+given the *same* ticket — both write a `**CSW prep**` comment, neither is in a position to
+supersede the other's the way Step 2 assumes, and the dispatch reads back two briefs for one
+change. **One ticket per session.** Parallelism also sharpens the triage in Step 4 rather than
+relaxing it: six questions apiece across four sessions is twenty-four interruptions to a human
+who is already context-switching between four tickets.
 
 ## Step 6: Write one comment
 

@@ -28,7 +28,9 @@ put to you **in the run**, in one round — and usually that is nothing.
 
 Prep is interactive by design: you typed it and you are sitting there, so it ends either with
 every blocking question answered or with prep confirming there were none. Either way the ticket
-is dispatchable when it stops. All of it — the spec, the decisions, the open questions if any,
+is dispatchable when it stops. It writes nothing to the repo, so several sessions prep in
+parallel quite happily — **one ticket per session**, since two sessions on one ticket race two
+comments into the same thread. All of it — the spec, the decisions, the open questions if any,
 and anything the ticket asserts that the codebase contradicts — lands in **one ticket comment**
 marked `**CSW prep**`. It opens no worktree, no branch and no PR, and leaves the ticket in Todo.
 Dispatch reads that comment back as part of the brief — decisions and answers in the thread are

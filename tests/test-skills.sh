@@ -443,6 +443,11 @@ assert_contains "$(cat "$prep")" "AskUserQuestion" \
   "prep: puts the surviving questions to the human who is actually sitting there"
 assert_contains "$(cat "$prep")" "nobody is there to answer" \
   "prep: falls back to leaving questions open when there is no human in the room"
+# Several prep sessions at once is the interactive path, not the fallback — the human is in
+# every one of them. The only thing that actually collides is two sessions on one ticket,
+# which races two markers into a thread whose supersede rule assumes one writer.
+assert_contains "$(cat "$prep")" "One ticket per session" \
+  "prep: parallel sessions are safe per ticket, and the collision is naming the same ticket twice"
 
 # Both directions have to be answered where an agent looks when it is about to rationalise.
 assert_contains "$prep_red_flags" "nobody watching" \
