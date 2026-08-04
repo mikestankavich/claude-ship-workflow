@@ -5,6 +5,7 @@
   "validate": "bash tests/run-tests.sh",
   "worktreeDir": ".claude/worktrees",
   "branchPattern": "<type>/<ticket>-<slug>",
+  "adrDir": "docs/adr",
   "gates": [
     {
       "when": "bin/**",

@@ -247,6 +247,13 @@ Each subagent returns one structured result and nothing else — no transcript, 
 | `pr` | The pull request URL, or none if it never got that far |
 | `summary` | One line on what changed |
 | `blocker` | For `draft` and `failed`: the question asked, or what stopped it |
+| `adr` | The ADR the dispatch proposed — its path and its title — or none, which is the usual answer |
+
+`adr` is in the contract because it cannot reach the morning any other way. `csw:work` Step 8
+writes the ADR itself when the repo sets `adrDir` — a subagent behaves exactly as a solo run
+does, and nothing about the batch is asked to hold back — but Step 7 below assembles the summary
+from these rows and Step 2's groups and nothing else. An ADR that is not in the row is an ADR
+that merges unnoticed, which is the single way writing them unattended goes wrong.
 
 That row is all the controller keeps. It is what Step 7 assembles the morning summary from,
 which is why the summary is built out of results rather than reconstructed from a transcript.
@@ -294,8 +301,16 @@ reconstructed by hand across the tracker or read back out of a transcript:
 | PRs open | Ticket, PR URL, one line on what changed — the `pr` rows |
 | Blocked with questions | Ticket, the question asked, the draft PR — the `draft` rows |
 | Failed | Ticket and what came back — the `failed` rows, if any |
+| ADRs proposed | Ticket, the ADR's path and title — the `adr` rows, if any. Proposed, not decided |
 | Below the cap | Every `belowCap` id from Step 2, in order — tonight's queue, not tonight's rejects |
 | Skipped and why | Every `skipped` entry from Step 2, verbatim reason |
+
+**ADRs proposed gets its own section, not a note tacked onto a PR row.** An architectural
+decision that merges because nobody noticed it in a summary line is the failure this reporting
+exists to prevent, and a section is what survives a skim of the morning. Most nights it is
+empty, and an empty section says the useful thing too. Each one is a single commit on its PR,
+so rejecting it is a revert — say that, so the morning reads them as proposals rather than as
+decisions already taken.
 
 If Step 2 failed outright, this table is not the report. Say plainly that selection failed,
 quote the filter's message, and that nothing was evaluated or dispatched — never fold a
@@ -326,3 +341,5 @@ Then stop. Merging the night's PRs is a morning decision, made by a human lookin
 | "Give the subagent an isolated worktree so it starts clean" | `csw:work` Step 4 makes the worktree, on the branch derived from the ticket. Pre-isolating it strands the work on a name nothing downstream can find. |
 | "The subagent stalled, I'll pick up where it left off" | One failure is one row in the summary. Record it and dispatch the next ticket. |
 | "I'll paste its transcript into the summary" | The summary is assembled from returned rows. A transcript in the summary is the problem the subagents exist to remove. |
+| "The ADR is a detail, it fits in the PR row" | It gets its own section. An ADR nobody noticed is the one way writing them unattended goes wrong. |
+| "Nobody was watching, so the subagent should not have written an ADR" | It should. Both paths write; review is the filter, and the ADR is its own commit so rejecting it is one revert. |

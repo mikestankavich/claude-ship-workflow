@@ -24,6 +24,7 @@ csw-config path          # which file it read, if any
 | `validate` | `""` | The one command that must pass before a PR opens. Empty means the repo declared none, and CSW will say so rather than guess. |
 | `worktreeDir` | `".worktrees"` | Where fallback worktrees go. Must be gitignored. Ignored when a native worktree tool is available. |
 | `branchPattern` | `"<type>/<ticket>-<slug>"` | Branch name template. Tokens: `<type>`, `<ticket>` (lowercased), `<slug>` (from the title, max 40 chars). |
+| `adrDir` | `""` | Where this repo keeps its architecture decision records, e.g. `docs/adr`. Non-empty and `/csw:work` asks, once, whether the run produced a decision that outlives its ticket. Empty and it never asks. See below. |
 | `gates` | `[]` | Extra validation triggered by which files changed. See below. |
 | `batch.maxTickets` | `3` | Cap on a single `/csw:batch` run. |
 | `batch.singleWriterLabels` | `["migration"]` | Labels admitting at most one ticket per batch. |
@@ -115,6 +116,46 @@ Four things to know before setting it:
 
 The output is not validated before use: it goes straight into `csw-batch-filter`, which exits
 non-zero naming the offending field if the shape is wrong.
+
+## `adrDir`
+
+Build specs are disposable and get swept. Architecture decision records are the artifact that
+persists — and nothing else in CSW ever asks whether a piece of work produced one. A rejected
+approach, a constraint discovered the hard way, a rule the next person will otherwise re-break:
+all of it lands in a PR description that nobody reads again.
+
+Empty — the default — and none of this happens. A repo that keeps no ADRs is never asked the
+question.
+
+Non-empty, and it names the directory:
+
+```json
+"adrDir": "docs/adr"
+```
+
+`/csw:work` then asks itself, once, at its hard stop: did this run produce a decision that
+outlives the ticket? Where the answer is yes it writes the ADR into that directory and pushes
+it onto the pull request as its own commit, announced in the report and the PR body as
+*proposed*. Where the answer is no — which is most of the time, and the expected answer — it
+says nothing and stops as it always did.
+
+- **Most tickets produce nothing durable.** An ADR per feature devalues the practice; the
+  discipline is in the rarity. The prompt is a question, not a deliverable.
+- **The directory supplies the convention.** CSW reads what is already there for the local
+  format and to derive the next `NNNN`. An empty or absent directory falls back to
+  `NNNN-kebab-title.md` with `Date:`, `Status:`, and `Tracking:` naming the tickets, then a
+  `## Context` section. An unset convention is not a reason to skip the question.
+- **Review is the filter, not the prompt.** Both a solo `/csw:work` and a `/csw:batch` subagent
+  write the ADR. A drafted file is concrete and cheap to reject — one revert, since it is
+  always its own commit — where a "candidate" line in a summary is vague and evaporates. No ADR
+  reaches the base branch without the same human review as every other line of the PR.
+- **Two dispatches in one night can claim the same number.** Each branches from the base and
+  neither can see the other's unmerged ADR. Number from the directory at write time and let
+  review renumber the second one; there is no sequencing machinery, and none is wanted.
+
+Where an ADR is warranted, cite it from the README of the code it governs and not only from the
+ADR directory — it wants to be reachable from where the mistake would be made. That is advice,
+not a gate.
 
 ## Gates
 

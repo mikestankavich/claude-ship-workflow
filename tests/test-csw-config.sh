@@ -15,6 +15,11 @@ assert_eq "$(cd "$repo" && "$BIN/csw-config" get ticketPrefix)" "" "default tick
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get trackerCommand)" "" "default trackerCommand is empty"
 assert_status 0 "trackerCommand is a known key, not an absent one" -- in_dir "$repo" "$BIN/csw-config" get trackerCommand
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get branchPattern)" "<type>/<ticket>-<slug>" "default branchPattern"
+# Empty means "this repo keeps no ADRs", and `/csw:work` never asks the question. The
+# exit-status assertion carries the same weight as trackerCommand's above: an absent key also
+# substitutes to the empty string, so assert_eq alone would pass with the default missing.
+assert_eq "$(cd "$repo" && "$BIN/csw-config" get adrDir)" "" "default adrDir is empty"
+assert_status 0 "adrDir is a known key, not an absent one" -- in_dir "$repo" "$BIN/csw-config" get adrDir
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get gates)" "[]" "default gates is an empty array"
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get batch.maxTickets)" "3" "default batch.maxTickets"
 assert_eq "$(cd "$repo" && "$BIN/csw-config" path)" "" "path is empty with no config file"
@@ -28,9 +33,11 @@ write_config "$repo" <<'JSON'
   "trackerCommand": "linear-cli todo --json",
   "validate": "just validate",
   "worktreeDir": ".claude/worktrees",
+  "adrDir": "docs/adr",
   "batch": { "maxTickets": 4 }
 }
 JSON
+assert_eq "$(cd "$repo" && "$BIN/csw-config" get adrDir)" "docs/adr" "override adrDir"
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get ticketPrefix)" "TRA" "override ticketPrefix"
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get validate)" "just validate" "override validate"
 # trackerCommand replaces only the fetch, so a repo setting it keeps `tracker` too — the
