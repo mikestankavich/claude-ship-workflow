@@ -408,6 +408,33 @@ assert_contains "$(cat "$batch")" "effective cap and where it came from" \
 assert_contains "$(cat "$batch")" "A filter failure in a dry run is a failure, not an empty plan" \
   "batch: a dry run cannot launder a failed selection into a quiet night"
 
+# --- batch: trackerCommand, the escape hatch from tracker MCP ---
+#
+# Step 1 is where the candidates come from, so it is the only step that changes: a non-empty
+# trackerCommand replaces the fetch, and its stdout becomes the same variable Step 2 already
+# pipes into the filter. Asserted on Step 1's own slice so a stray mention elsewhere in the
+# skill cannot pass for the branch actually being written.
+batch_step1=$(sed -n '/^## Step 1/,/^## Step 2/p' "$batch")
+assert_contains "$batch_step1" "csw-config get trackerCommand" \
+  "batch: Step 1 reads trackerCommand rather than assuming the tracker"
+assert_contains "$batch_step1" "bash -c" \
+  "batch: says how the command string is executed, matching validate and gates[].run"
+assert_contains "$batch_step1" "read-only" \
+  "batch: trackerCommand runs in a dry run too, so it must not have side effects"
+# The whole point of the key is skipping in-context reshaping across ~20 tickets, which is
+# where an agent introduces errors. Prose that merely runs the command and then reshapes its
+# output has kept the failure mode it was added to remove.
+assert_contains "$batch_step1" "is the filter's input" \
+  "batch: the command's stdout is used as-is, not reshaped in context"
+# `cmd | csw-batch-filter` reports the filter's status, not the command's, so a failing
+# command that printed a partial array would read as a selection rather than a failure.
+assert_contains "$batch_step1" "exit status before piping" \
+  "batch: a non-zero trackerCommand is caught rather than masked by the pipe"
+assert_contains "$batch_step1" "does not pre-check the shape" \
+  "batch: shape validation stays in csw-batch-filter, which already names the bad field"
+assert_contains "$batch_red_flags" "trackerCommand" \
+  "batch: a red flag catches empty trackerCommand output read as a quiet night"
+
 # --- prep: recommends by default, asks only what a recommendation cannot settle ---
 # Measured over four tickets: prep asked 4-6 questions on each, and every question carrying a
 # recommendation was answered by taking the recommendation. Those questions carried no

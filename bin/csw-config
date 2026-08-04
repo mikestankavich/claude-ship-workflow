@@ -9,6 +9,7 @@ set -euo pipefail
 DEFAULTS='{
   "ticketPrefix": "",
   "tracker": "none",
+  "trackerCommand": "",
   "baseBranch": "main",
   "defaultType": "feat",
   "validate": "",

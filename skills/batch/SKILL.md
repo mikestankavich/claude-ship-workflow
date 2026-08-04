@@ -39,8 +39,8 @@ would be a new manual step in front of every ticket in the column.
 
 ## Step 1: Pull the candidates
 
-Read every Todo ticket from the tracker named by `csw-config get tracker` and shape it into
-the filter's input:
+Either way, this step ends with `candidates_json` holding a JSON array in the shape Step 2
+pipes into `csw-batch-filter`:
 
 ```json
 [
@@ -54,6 +54,47 @@ the filter's input:
   }
 ]
 ```
+
+Which way depends on one key:
+
+```bash
+csw-config get trackerCommand
+```
+
+**Empty — read the tracker.** Read every Todo ticket from the tracker named by
+`csw-config get tracker` and shape it into the array above yourself. This is the default, and
+it is what `tracker: linear` does through MCP.
+
+**Non-empty — run it, and its stdout _is the filter's input_.** Do not reshape it, do not
+re-read the tracker, do not merge anything into it. Skipping the in-context reshaping across a
+whole column of tickets is the entire reason the key exists — reshaping the output anyway keeps
+the failure mode it was added to remove:
+
+```bash
+candidates_json=$(bash -c "$(csw-config get trackerCommand)")
+```
+
+- **`bash -c "<string>"` from the repo root, no arguments and no injected environment** — the
+  same way `validate` and `gates[].run` are already run.
+- **Capture stdout and check the exit status before piping.** `bash -c "$cmd" |
+  csw-batch-filter` would report the *filter's* status, not the command's, so a failing command
+  that printed a partial array reads as a selection rather than a failure. A non-zero exit is a
+  **failed selection**: quote its stderr verbatim, say plainly that selection failed and no
+  tickets were dispatched, and stop — exactly as Step 2 does for the filter itself. Do not
+  continue to Step 3.
+- **Step 1 does not pre-check the shape.** `csw-batch-filter` already validates it and exits 2
+  naming the offending field, and Step 2's existing arm turns that into a failed selection.
+  A second shape check here only drifts from the one that matters. Pass the stdout through
+  unread and let the filter speak.
+- **A command that prints nothing has failed, not found nothing.** Empty stdout hits the
+  filter's `no input on stdin` and exits 2, which is a failed selection. A command with nothing
+  to report must print `[]`.
+- **`tracker` still has to be right.** `trackerCommand` replaces only the fetch;
+  `csw-batch-filter` keeps reading `tracker` to rank by priority, so someone shelling out to a
+  Linear GraphQL query still sets `tracker: linear` or gets the wrong order silently.
+- **It must be read-only.** A dry run reaches Step 1 before it reaches Step 3, so it runs this
+  command too — skipping it would leave a dry run with no plan to report. Step 3's "no side
+  effects" promise covers CSW's own actions, not what an arbitrary configured command does.
 
 ## Step 2: Select
 
@@ -274,6 +315,8 @@ Then stop. Merging the night's PRs is a morning decision, made by a human lookin
 | "I'll merge the PRs that clearly passed" | The morning review is the gate. Do not pre-empt it. |
 | "The skip reasons are noise in the summary" | They are the tuning data for the next batch. Report all of them. |
 | "csw-batch-filter printed nothing, must mean no tickets were eligible" | Check the exit code first. Non-zero means selection failed — report the failure, don't dispatch nothing and call it a quiet night. |
+| "trackerCommand printed nothing, must be a quiet night" | Check its exit code, then remember empty output is a *failed* selection — only `[]` is an empty one. |
+| "trackerCommand's output is nearly right, I'll tidy it up" | Then you are doing the in-context reshaping the key exists to avoid. Pass it through; the filter names what's wrong. |
 | "They said cap it at 6 tonight, I'll pass that through" | The override can only lower the cap. `batch.maxTickets` is the ceiling; ignore anything at or above it, and say so. |
 | "Over the cap is skipped, same table" | Different questions. `skipped` is why a ticket must not run; `belowCap` is what a bigger cap would have picked up. Merged, neither is answerable. |
 | "A dry run may as well make the worktrees, they're cheap" | A dry run has no side effects at all. No branches, no worktrees, no ticket state changes — that is the only reason it is safe to run before anything is decided. |

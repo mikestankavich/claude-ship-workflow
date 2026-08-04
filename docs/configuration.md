@@ -18,6 +18,7 @@ csw-config path          # which file it read, if any
 |---|---|---|
 | `ticketPrefix` | `""` | Prefix added to a bare number, so `/csw:work 1088` becomes `TRA-1088`. Leave empty and bare numbers are rejected as ambiguous. |
 | `tracker` | `"none"` | `linear` (via MCP), `github` (via `gh`), or `none` (paste the ticket text). |
+| `trackerCommand` | `""` | `/csw:batch` **only**: a command printing the candidate array on stdout, instead of reading the tracker. Must be read-only. Does not replace `tracker`. See below. |
 | `baseBranch` | `"main"` | What PRs target, what "merged" is measured against, and where cleanup returns to. |
 | `defaultType` | `"feat"` | Conventional-commit type used when the ticket gives no signal. |
 | `validate` | `""` | The one command that must pass before a PR opens. Empty means the repo declared none, and CSW will say so rather than guess. |
@@ -60,6 +61,60 @@ Set `ticketPrefix` alongside `tracker: github` and it still applies, so `68` bec
 Every other tracker keeps the strict rule: with no `ticketPrefix`, a bare number does not
 identify anything and is rejected with exit 2. That is deliberate — silently guessing which
 project a number belongs to is worse than refusing.
+
+## `trackerCommand`
+
+An escape hatch for people who would rather shell out to a CLI, or to their own GraphQL query,
+than have an agent talk to the tracker. Empty — the default — and nothing changes: `tracker`
+decides how tickets are read.
+
+Non-empty and `/csw:batch` Step 1 runs it as `bash -c "<string>"` from the repo root, with no
+arguments and no injected environment, exactly as `validate` and `gates[].run` are run. Its
+stdout is used **as-is** as the candidate array. That is the point: one call returning the
+array the filter consumes, rather than several tracker calls plus reshaping across twenty
+tickets in context, which is where the errors come from.
+
+```json
+"tracker": "linear",
+"trackerCommand": "linear-todo --json"
+```
+
+The expected stdout is a JSON array of ticket objects:
+
+```json
+[
+  {
+    "id": "ENG-1075",
+    "state": "Todo",
+    "priority": 2,
+    "labels": ["migration"],
+    "blockedBy": [],
+    "relatedTo": ["ENG-1080", "ENG-1081"]
+  }
+]
+```
+
+Only `id` is required — a non-empty string, unique across the array. `state`, `priority`,
+`labels`, `blockedBy`, and `relatedTo` may each be absent or `null`, with the types above when
+present. What is load-bearing in practice is `state`: it must read exactly `"Todo"` or the
+ticket is dropped as "not in Todo", so a command that omits the field selects nothing at all.
+
+Four things to know before setting it:
+
+- **It is `/csw:batch` only.** `/csw:work` and `/csw:prep` read a single ticket, and they keep
+  reading it through `tracker`. The name suggests otherwise; the scope is batch selection.
+- **`tracker` still has to be correct.** `trackerCommand` replaces the fetch, not the tracker.
+  Priority ordering (below) is keyed off `tracker`, so shelling out to a Linear query and
+  setting `tracker: none` because MCP is no longer in play gets the wrong sort order silently.
+- **A non-zero exit is a failed selection**, reported with the command's stderr verbatim, with
+  nothing dispatched. Printing *nothing at all* is also a failure — a command with nothing to
+  report must print `[]`, which is an empty selection. A failed selection is never an empty one.
+- **It must be read-only.** `/csw:batch --dry-run` reaches Step 1 before it decides to stop, so
+  a dry run does run this command. A dry run's "no side effects" promise covers what CSW does,
+  not what a configured command chooses to do.
+
+The output is not validated before use: it goes straight into `csw-batch-filter`, which exits
+non-zero naming the offending field if the shape is wrong.
 
 ## Gates
 
