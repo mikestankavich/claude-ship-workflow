@@ -80,12 +80,36 @@ if [ "$skill_count" -eq 0 ]; then
   printf 'FAIL no skill directories found under skills/\n' >&2
 fi
 
+# --- assert_contains vs assert_guards, throughout this file ---
+#
+# Every assertion here guards a behaviour some skill documents, and its job is to
+# go red when that behaviour is removed. A whole-file `assert_contains` only does
+# that while its needle occurs *nowhere else in the file*: the moment it also
+# appears somewhere the behaviour does not live, a revert leaves the needle
+# behind and the assertion stays green while guarding nothing. That is #69.
+#
+# So the rule in this file is mechanical rather than stylistic: **if the needle
+# is not unique to the behaviour's own region, the assertion uses
+# `assert_guards`** and names the region it protects. A needle that occurs once
+# already has the property — it vanishes with the region — and stays on
+# `assert_contains`.
+#
+# A deliberate consequence: a region is *not* required to be the only place the
+# needle appears in the file. Every skill restates its load-bearing rules in
+# `## Red flags`, and this file separately asserts those restatements. Requiring
+# the needle to be absent outside its region would fail on that convention
+# working as intended, and would only be the uniqueness rule under another name.
+# Present-inside-the-region is what makes a revert bite; that is the whole
+# contract.
+
 # --- work: the hard stop and the tools it must reach for ---
 work="$SKILLS/work/SKILL.md"
 assert_contains "$(cat "$work")" "csw-ticket normalize" "work: normalises the ticket reference"
 assert_contains "$(cat "$work")" "csw-ticket branch" "work: derives the branch name"
-assert_contains "$(cat "$work")" "csw-gates" "work: runs diff-triggered gates"
-assert_contains "$(cat "$work")" "EnterWorktree" "work: prefers the native worktree tool"
+assert_guards "$work" '^## Step 6: Validate' '^## Step 7: Commit and open the PR' \
+  "csw-gates" "work: runs diff-triggered gates"
+assert_guards "$work" '^## Step 4: Open an isolated workspace' '^## Step 5: Do the work' \
+  "EnterWorktree" "work: prefers the native worktree tool"
 assert_contains "$(cat "$work")" "--draft" "work: knows the draft-PR rule"
 assert_contains "$(cat "$work")" "Hold for review is a hard stop" "work: states the hard stop"
 assert_contains "$(cat "$work")" "No PR means Step 9, not Step 8" "work: Step 7 failures route to Step 9"
@@ -179,18 +203,25 @@ assert_contains "$(cat "$prep")" "csw-ticket normalize" "prep: normalises the ti
 assert_contains "$(cat "$prep")" "superpowers:brainstorming" "prep: brainstorms the ticket"
 # Brainstorming's default mode designs the implementation. Prep wants the questions instead —
 # the design belongs to the dispatch that has a worktree to try it in.
-assert_contains "$(cat "$prep")" "surface-the-questions" \
+assert_guards "$prep" '^## Step 3: Brainstorm it' '^## Step 4: Triage' \
+  "surface-the-questions" \
   "prep: brainstorms for the questions rather than for a design"
 
 # The marker is the whole interface between prep and the dispatch that reads it back. If it
-# drifts, prep still writes a comment and csw:work still finds nothing.
-assert_contains "$(cat "$prep")" '**CSW prep**' "prep: writes the stable marker"
-assert_contains "$(cat "$prep")" "One comment" "prep: leaves exactly one comment, not a thread"
+# drifts, prep still writes a comment and csw:work still finds nothing. Scoped to Step 6,
+# which is the step that writes it — Step 2's mention is prep *reading back* an earlier
+# comment, and would keep this green with the writing side gone.
+assert_guards "$prep" '^## Step 6: Write one comment' '^## Step 7: Stop' \
+  '**CSW prep**' "prep: writes the stable marker"
+assert_guards "$prep" '^## Step 6: Write one comment' '^## Step 7: Stop' \
+  "One comment" "prep: leaves exactly one comment, not a thread"
 
 # The three things the comment has to carry. A comment with only a spec is a summary of the
-# ticket, which the ticket already is.
+# ticket, which the ticket already is. Scoped to Step 6 for the same reason: Step 3 tells prep
+# to *find* contradictions, Step 6 is what puts them in the comment.
 assert_contains "$(cat "$prep")" "open questions" "prep: the comment carries the open questions"
-assert_contains "$(cat "$prep")" "the codebase contradicts" \
+assert_guards "$prep" '^## Step 6: Write one comment' '^## Step 7: Stop' \
+  "the codebase contradicts" \
   "prep: the comment carries what the ticket asserts and the code denies"
 
 # Zero side effects is the property that makes prep free to run before anything is decided,
@@ -217,8 +248,10 @@ assert_contains "$prep_red_flags" "worktree" \
 
 # --- merge: never squash, always check CI, always chain into cleanup ---
 merge="$SKILLS/merge/SKILL.md"
-assert_contains "$(cat "$merge")" "gh pr checks" "merge: checks CI"
-assert_contains "$(cat "$merge")" "gh pr merge" "merge: merges the PR"
+assert_guards "$merge" '^## Step 3: Check CI' '^## Step 4: Merge' \
+  "gh pr checks" "merge: checks CI"
+assert_guards "$merge" '^## Step 4: Merge' '^## Step 5: Chain into cleanup' \
+  "gh pr merge" "merge: merges the PR"
 assert_contains "$(cat "$merge")" "--merge --delete-branch" "merge: merge commit, delete the branch (local and remote)"
 assert_contains "$(cat "$merge")" "csw:cleanup" "merge: chains into cleanup"
 assert_contains "$(cat "$merge")" "gh pr view <number> --json state,mergedAt" \
@@ -234,10 +267,19 @@ assert_contains "$(cat "$merge")" "BLOCKED" "merge: covers mergeStateStatus BLOC
 
 # --- cleanup: sweeps unprompted, asks only about the tracker ---
 cleanup="$SKILLS/cleanup/SKILL.md"
-assert_contains "$(cat "$cleanup")" "csw-sweep" "cleanup: runs the sweep"
-assert_contains "$(cat "$cleanup")" "ExitWorktree" "cleanup: prefers the native worktree exit"
-assert_contains "$(cat "$cleanup")" "git worktree remove" "cleanup: removes the worktree"
-assert_contains "$(cat "$cleanup")" "git worktree prune" "cleanup: prunes stale registrations"
+assert_guards "$cleanup" '^## Step 4: Sweep for everything else' \
+  '^### The branch you are standing on' \
+  "csw-sweep" "cleanup: runs the sweep"
+assert_guards "$cleanup" '^## Step 2: Leave the worktree' '^### When ExitWorktree warns' \
+  "ExitWorktree" "cleanup: prefers the native worktree exit"
+# The removal itself belongs to Step 3's manual bullet: on the ExitWorktree path the tool has
+# already done it, and every other occurrence in this file is prose *about* the command.
+assert_guards "$cleanup" '^- \*\*Step 2 fell back to the manual' \
+  '^If `git branch -d` refuses' \
+  "git worktree remove" "cleanup: removes the worktree"
+assert_guards "$cleanup" '^## Step 3: Remove this worktree and branch' \
+  '^## Step 4: Sweep for everything else' \
+  "git worktree prune" "cleanup: prunes stale registrations"
 # The pull must bind both paths, not just the manual fallback — an ExitWorktree cleanup
 # that skips it leaves the local base branch behind the merge it just landed.
 assert_contains "$(cat "$cleanup")" "on either path" "cleanup: pulls the base branch on both paths"
@@ -252,7 +294,8 @@ assert_eq "$bare_pull" "" \
   "cleanup: every runnable git pull prunes, so the sweep's [gone] arm reads fresh state"
 assert_contains "$(cat "$cleanup")" "only a prune" \
   "cleanup: says why the prune is load-bearing, not cosmetic"
-assert_contains "$(cat "$cleanup")" "sibling" "cleanup: checks for sibling PRs in other repos"
+assert_guards "$cleanup" '^## Step 5: The tracker, last' '^## Red flags' \
+  "sibling" "cleanup: checks for sibling PRs in other repos"
 # The sibling search must be scoped to this repo's owner. Unscoped, `gh search prs` runs
 # across all of GitHub, and with `tracker: github` the ticket is a bare number — searching
 # for 81 returned 30 strangers' PRs and not one sibling.
@@ -272,7 +315,15 @@ assert_contains "$(cat "$cleanup")" "never require a separate instruction" "clea
 assert_contains "$(cat "$cleanup")" "gh pr view --json state,mergedAt" "cleanup: verifies the PR is merged before removing anything"
 assert_contains "$(cat "$cleanup")" "unknown, not absent" "cleanup: a failed sweep is reported distinctly from an empty one"
 assert_contains "$(cat "$cleanup")" "the command failing for any reason" "cleanup: any gh pr view failure is a stop, not just a non-merged state"
-assert_contains "$(cat "$cleanup")" "already gone" \
+# Scoped to the ExitWorktree bullet itself, not to the whole file and not to Step 3. The
+# needle this replaces was `already gone` against the whole file, which also matched Step 3's
+# unrelated "The remote branch is already gone…" sentence — so the assertion passed with the
+# fix reverted and guarded nothing (#69). Section granularity does not fix it either: that
+# sentence is inside Step 3's own section. The region has to be the bullet.
+assert_guards "$cleanup" \
+  '^- \*\*Step 2 used the native ExitWorktree tool\.\*\*' \
+  '^- \*\*Step 2 fell back to the manual' \
+  'that is "already gone," which is success' \
   "cleanup: Step 3 treats a worktree ExitWorktree already removed as success, not failure"
 # The sweep now reports a merged branch even when it is checked out, which
 # `git branch -d` refuses. Cleanup has to know to land on the base first.
@@ -288,13 +339,21 @@ assert_contains "$(cat "$cleanup")" "git branch --show-current      # must be" \
 # ExitWorktree's "will discard N commits" warning fires on essentially every cleanup,
 # because cleanup always runs right after a forge-side merge. It must be proven false
 # against the remote, never waved through and never stalled on.
-assert_contains "$(cat "$cleanup")" "git merge-base --is-ancestor" \
+assert_guards "$cleanup" '^### When ExitWorktree warns it will discard commits' \
+  '^### Land on the base branch' \
+  "git merge-base --is-ancestor" \
   "cleanup: proves the discard warning false against the remote instead of trusting it"
 assert_contains "$(cat "$cleanup")" "Non-zero means the warning is real" \
   "cleanup: a non-zero merge-base check stops the cleanup"
-assert_contains "$(cat "$cleanup")" "discard_changes: true" \
+assert_guards "$cleanup" '^### When ExitWorktree warns it will discard commits' \
+  '^### Land on the base branch' \
+  "discard_changes: true" \
   "cleanup: names the flag that must never be passed unverified"
-assert_contains "$(cat "$cleanup")" "display only" \
+# Narrower than the subsection: this is the "not the branch rename" bullet specifically, which
+# is the claim being guarded. The Red-flags row restating it is asserted separately below.
+assert_guards "$cleanup" '^- \*\*Not the branch rename\.\*\*' \
+  '^- \*\*Not a reason to skip Step 1\.\*\*' \
+  "display only" \
   "cleanup: says the stale branch name in the warning is cosmetic, not a reason to dismiss the count"
 # Red flags are where an agent looks when it is about to rationalise. The verification
 # rule has to appear there too, not only in the step prose.
@@ -314,8 +373,11 @@ assert_contains "$(cat "$cleanup")" "cannot be suppressed" \
 # --- batch: never auto-invoked, always explains its skips ---
 batch="$SKILLS/batch/SKILL.md"
 assert_eq "$(fm_field "$batch" 'disable-model-invocation')" "true" "batch: never model-invoked"
-assert_contains "$(cat "$batch")" "csw-batch-filter" "batch: delegates selection"
-assert_contains "$(cat "$batch")" "csw:work" "batch: dispatches through the work skill"
+assert_guards "$batch" '^## Step 2: Select' '^## Step 3: If this is a dry run' \
+  "csw-batch-filter" "batch: delegates selection"
+assert_guards "$batch" '^## Step 5: Dispatch each to a fresh subagent' \
+  '^## Step 6: When a ticket blocks or fails' \
+  "csw:work" "batch: dispatches through the work skill"
 assert_contains "$(cat "$batch")" "--draft" "batch: blocked work becomes a draft PR"
 assert_contains "$(cat "$batch")" "Morning summary" "batch: reports a morning summary"
 # Case-insensitive: the prerequisite reads naturally as a sentence-initial "Backfill", and a
@@ -347,7 +409,9 @@ assert_contains "$(cat "$batch")" "A failed selection is never an empty selectio
 # inherited ticket one's plan, its diff and its dead ends. Worktrees were isolated; the mind
 # driving them was not. Each ticket now gets a subagent, which is the programmatic equivalent
 # of clearing context between dispatches.
-assert_contains "$(cat "$batch")" "fresh subagent" \
+assert_guards "$batch" '^## Step 5: Dispatch each to a fresh subagent' \
+  '^## Step 6: When a ticket blocks or fails' \
+  "fresh subagent" \
   "batch: each ticket is dispatched to a subagent of its own"
 assert_contains "$(cat "$batch")" "Never run \`csw:work\` in this session" \
   "batch: the controlling session never does a ticket's work itself"
@@ -384,7 +448,8 @@ assert_contains "$batch_red_flags" "subagent" \
   "batch: red flags catch a dispatch run in the controlling session"
 assert_contains "$(cat "$batch")" "can only lower tonight's cap, never raise it" \
   "batch: the cap override is documented as lower-only"
-assert_contains "$(cat "$batch")" "csw-config get batch.maxTickets" \
+assert_guards "$batch" '^## Step 2: Select' '^## Step 3: If this is a dry run' \
+  "csw-config get batch.maxTickets" \
   "batch: reads the configured cap before evaluating an override"
 
 # --- batch: the filter's three-key output, and the dry run that reads it ---
@@ -392,7 +457,8 @@ assert_contains "$(cat "$batch")" "csw-config get batch.maxTickets" \
 # The skill has to name belowCap, because it is the group whose whole reason for existing
 # is that a reader can tell it apart from skipped. Prose that only mentions two groups
 # teaches the old shape back.
-assert_contains "$(cat "$batch")" "belowCap" "batch: names the filter's belowCap group"
+assert_guards "$batch" '^## Step 2: Select' '^## Step 3: If this is a dry run' \
+  "belowCap" "batch: names the filter's belowCap group"
 assert_contains "$(cat "$batch")" "never blames the cap" \
   "batch: says skipped carries no cap reason"
 
@@ -450,7 +516,8 @@ assert_contains "$(cat "$prep")" "Question count is a quality signal" \
 # and prep is back to six questions a ticket.
 assert_contains "$(cat "$prep")" "No recommendation can be formed" \
   "prep: names the first branch that legitimately asks"
-assert_contains "$(cat "$prep")" "cannot be walked back by editing a file" \
+assert_guards "$prep" '^## Step 4: Triage' '^## Step 5: Ask, once' \
+  "cannot be walked back by editing a file" \
   "prep: bounds the second branch to a class of consequence, not a feeling of importance"
 
 # The answers have to land in the same comment they were asked in. A decision recorded
@@ -460,7 +527,8 @@ assert_contains "$(cat "$prep")" "## Decisions" \
 assert_contains "$(cat "$prep")" "the reasoning that made it a decision" \
   "prep: a recorded decision carries the reasoning a human would need to overturn it"
 # An absent section is not a signal. "Nothing left open" is, and a dispatch reads it back.
-assert_contains "$(cat "$prep")" "_None._" \
+assert_guards "$prep" '^## Step 6: Write one comment' '^## Step 7: Stop' \
+  "_None._" \
   "prep: an empty open-questions section says so rather than disappearing"
 
 # Prep is run with the person who can answer sitting there — that is the design centre, not a
@@ -468,7 +536,10 @@ assert_contains "$(cat "$prep")" "_None._" \
 # comment someone reads tomorrow, which is the day of latency prep exists to remove.
 assert_contains "$(cat "$prep")" "Prep is an interactive command" \
   "prep: the run with a human present is the norm, not the exception"
-assert_contains "$(cat "$prep")" "dispatchable" \
+# The two-end-states contract is stated in the preamble, which is also where the assertion
+# above it looks. Elsewhere in the file "dispatchable" is prose leaning on that contract.
+assert_guards "$prep" '^\*\*Prep is an interactive command\*\*' '^## Step 0' \
+  "dispatchable" \
   "prep: names the state a run has to leave the ticket in"
 
 # Recommending to a human who can reject it needs a human. Without one — a subagent, a column
