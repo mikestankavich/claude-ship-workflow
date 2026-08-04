@@ -31,6 +31,12 @@ four links each, the dependency information exists but is in the wrong field and
 first, and if `blockedBy` is empty across the board, say so and stop rather than dispatching
 a batch whose ordering constraints are invisible.
 
+**Prepped tickets dispatch better.** `/csw:prep <ticket>` leaves a spec and its open questions
+on the ticket, and `csw:work` Step 2 reads them, so a question that would have cost a whole
+dispatch to discover is already answered when the loop reaches it. It is not required, and this
+loop **does not skip unprepped** tickets — an optional command that silently became a gate
+would be a new manual step in front of every ticket in the column.
+
 ## Step 1: Pull the candidates
 
 Read every Todo ticket from the tracker named by `csw-config get tracker` and shape it into

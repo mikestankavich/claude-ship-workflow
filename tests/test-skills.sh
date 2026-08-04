@@ -102,6 +102,29 @@ else
   PASSES=$((PASSES + 1))
 fi
 
+# --- work: reading what csw:prep left behind ---
+#
+# Prep writes its spec and its open questions to a ticket comment. If Step 2 does not go and
+# read that comment, prep is a command that produces nothing anyone consumes.
+work_step2=$(sed -n '/^## Step 2/,/^## Step 3/p' "$work")
+assert_contains "$work_step2" '**CSW prep**' \
+  "work: Step 2 looks for the marker csw:prep writes"
+assert_contains "$work_step2" "comments" \
+  "work: Step 2 reads the ticket's comments, not only its description"
+# A question prep asked and a human answered is a settled decision. Re-opening it burns the
+# dispatch on a conversation that already happened.
+assert_contains "$work_step2" "is a decision" \
+  "work: an answered prep question is treated as settled, not re-litigated"
+# Unanswered questions are the signal prep exists to produce. Guessing past them is exactly
+# the wasted dispatch prep was added to avoid.
+assert_contains "$work_step2" "rather than guessing" \
+  "work: unanswered prep questions are not guessed past"
+assert_contains "$work_step2" "Step 9" \
+  "work: unanswered prep questions route to the draft path"
+work_red_flags=$(sed -n '/^## Red flags/,$p' "$work")
+assert_contains "$work_red_flags" "prep" \
+  "work: red flags catch a dispatch that ignores the prep comment"
+
 # --- work: the interactive modifier, and everything it does not change ---
 
 # The word has to be discoverable from the hint, or the only people who type it are the
@@ -142,6 +165,48 @@ assert_contains "$work_red_flags" "modifier" \
   "work: red flags catch a modifier being waved through"
 assert_contains "$work_red_flags" "interactive" \
   "work: red flags deny that interactive relaxes the hard stop"
+
+# --- prep: specs a ticket, touches nothing ---
+prep="$SKILLS/prep/SKILL.md"
+assert_contains "$(cat "$prep")" "csw-ticket normalize" "prep: normalises the ticket reference"
+assert_contains "$(cat "$prep")" "superpowers:brainstorming" "prep: brainstorms the ticket"
+# Brainstorming's default mode designs the implementation. Prep wants the questions instead —
+# the design belongs to the dispatch that has a worktree to try it in.
+assert_contains "$(cat "$prep")" "surface-the-questions" \
+  "prep: brainstorms for the questions rather than for a design"
+
+# The marker is the whole interface between prep and the dispatch that reads it back. If it
+# drifts, prep still writes a comment and csw:work still finds nothing.
+assert_contains "$(cat "$prep")" '**CSW prep**' "prep: writes the stable marker"
+assert_contains "$(cat "$prep")" "One comment" "prep: leaves exactly one comment, not a thread"
+
+# The three things the comment has to carry. A comment with only a spec is a summary of the
+# ticket, which the ticket already is.
+assert_contains "$(cat "$prep")" "open questions" "prep: the comment carries the open questions"
+assert_contains "$(cat "$prep")" "the codebase contradicts" \
+  "prep: the comment carries what the ticket asserts and the code denies"
+
+# Zero side effects is the property that makes prep free to run before anything is decided,
+# and it is enumerated rather than implied for the same reason batch's dry run enumerates it.
+assert_contains "$(cat "$prep")" \
+  "No worktree, no branch, no pull request, no validation run" \
+  "prep: its no-side-effects property is enumerated, not implied"
+# Todo is self-selecting for the batch loop. Claiming the ticket the way csw:work does would
+# quietly remove every prepped ticket from the column prep exists to improve.
+assert_contains "$(cat "$prep")" "stays in Todo" \
+  "prep: leaves the ticket in Todo so the batch loop still picks it up"
+assert_contains "$(cat "$prep")" "Do not claim it" \
+  "prep: says not to claim the ticket, since reading it is where csw:work claims it"
+
+# Prose has to be able to *name* the things prep must not do, so these match runnable
+# invocations at the start of a line rather than any mention of the word.
+prep_writes=$(grep -nE '^[[:space:]]*(gh pr create|gh pr merge|git worktree|git commit|git push|git checkout|git switch|git branch)' "$prep" || true)
+assert_eq "$prep_writes" "" "prep: contains no runnable command that touches the repo"
+prep_flags=$(fm_field "$prep" 'argument-hint')
+assert_contains "$prep_flags" "ticket" "prep: takes a ticket reference"
+prep_red_flags=$(sed -n '/^## Red flags/,$p' "$prep")
+assert_contains "$prep_red_flags" "worktree" \
+  "prep: red flags catch a prep run that starts doing the work"
 
 # --- merge: never squash, always check CI, always chain into cleanup ---
 merge="$SKILLS/merge/SKILL.md"
@@ -260,6 +325,12 @@ fi
 # goes over on its own.
 assert_contains "$(cat "$batch")" "the ticket reference and nothing else" \
   "batch: dispatches csw:work with no modifier, so no ticket can stop for answers"
+# Prep improves a dispatch but must not become a gate on one: a loop that skipped unprepped
+# tickets would turn an optional command into a required step for every ticket in the column.
+assert_contains "$(cat "$batch")" "Prepped tickets dispatch better" \
+  "batch: names prep as the thing that makes a dispatch land better"
+assert_contains "$(cat "$batch")" "does not skip unprepped" \
+  "batch: prep is a recommendation, never a filter"
 assert_contains "$(cat "$batch")" "A failed selection is never an empty selection" \
   "batch: a filter failure is reported distinctly from an empty batch"
 

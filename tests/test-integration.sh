@@ -37,7 +37,7 @@ for f in "$REPO_ROOT"/bin/*; do
 done
 
 # --- Every skill the README advertises exists. ---
-for s in work merge cleanup batch; do
+for s in prep work merge cleanup batch; do
   if [ -f "$REPO_ROOT/skills/$s/SKILL.md" ]; then
     PASSES=$((PASSES + 1))
   else
