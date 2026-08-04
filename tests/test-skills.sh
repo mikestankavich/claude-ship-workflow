@@ -89,10 +89,17 @@ assert_contains "$(cat "$work")" "EnterWorktree" "work: prefers the native workt
 assert_contains "$(cat "$work")" "--draft" "work: knows the draft-PR rule"
 assert_contains "$(cat "$work")" "Hold for review is a hard stop" "work: states the hard stop"
 assert_contains "$(cat "$work")" "No PR means Step 9, not Step 8" "work: Step 7 failures route to Step 9"
-assert_contains "$(cat "$work")" "csw-gates --files" \
-  "work: Step 6 gates the working tree via --files, not a bare baseBranch diff"
-assert_contains "$(cat "$work")" "git status --porcelain" \
-  "work: Step 6 feeds uncommitted changes into the gate check, not just the committed diff"
+assert_contains "$(cat "$work")" 'csw-gates --worktree "<baseBranch>"' \
+  "work: Step 6 gates the working tree, not a bare baseBranch diff"
+# The old Step 6 hand-rolled the union out of `git status --porcelain | cut | sed`, which git's
+# own quoting, rename format, and untracked-directory collapsing all broke. Deriving the list
+# in the shell is the bug; --worktree exists so the skill does not have to.
+if grep -q 'git status --porcelain' "$work"; then
+  FAILURES=$((FAILURES + 1))
+  printf 'FAIL work: Step 6 must not hand-roll the file list out of git status\n' >&2
+else
+  PASSES=$((PASSES + 1))
+fi
 assert_contains "$(cat "$work")" "returning control to the" \
   "work: Step 8's hard stop acknowledges being dispatched from csw:batch"
 if grep -q "gh pr merge" "$work"; then

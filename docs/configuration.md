@@ -96,8 +96,15 @@ deployment.
 Preview the gates a branch triggers:
 
 ```bash
-csw-gates main
+csw-gates main              # committed history only
+csw-gates --worktree main   # ...plus whatever is still uncommitted
 ```
+
+`--worktree` is the one to reach for before a commit exists — it unions the committed diff with
+the working tree and reports the gates for the tree as it will look once you commit it, so a
+migration you have written but not yet added still fires its gate. Uncommitted deletions drop
+out, renames and copies count as their destination, and a path containing a literal newline is
+a hard error rather than a gate that quietly does not run.
 
 `gates` must be a JSON array of objects, each with both `when` and `run`; anything else
 (a non-array, a non-object entry, or an entry missing either key) is a configuration error,

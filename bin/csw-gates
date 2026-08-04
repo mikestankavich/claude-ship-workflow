@@ -9,9 +9,92 @@ die() { printf 'csw-gates: %s\n' "$1" >&2; exit "$2"; }
 usage() {
   cat <<'EOF'
 Usage:
-  csw-gates <base-ref>   Diff <base-ref>...HEAD and print the gates it triggers
-  csw-gates --files      Read a newline-separated file list from stdin instead
+  csw-gates <base-ref>              Diff <base-ref>...HEAD and print the gates it triggers
+  csw-gates --worktree <base-ref>   ...unioned with the working tree, for an uncommitted change
+  csw-gates --files                 Read a newline-separated file list from stdin instead
 EOF
+}
+
+files=''
+
+# Append one path to the file list, rejecting anything the line-based matching
+# below cannot represent.
+add_path() { # path
+  case $1 in
+    '') return 0 ;;
+    *$'\n'*)
+      # Same failure class, same exit code and phrasing, as csw-sweep's check
+      # against a path its output format cannot carry. Silently skipping a
+      # configured gate is a wrong answer, not a safe default.
+      die "path contains a newline, which the line-based gate matching cannot represent: $1" 2
+      ;;
+  esac
+  files="${files}$1
+"
+}
+
+# Every path that will exist once the current work is committed: the committed
+# diff against <base-ref>, unioned with the working tree.
+#
+# Both halves are read NUL-delimited. That is the whole point of this mode: git's
+# default output C-style-quotes any path containing a space or a non-ASCII byte,
+# and writes a rename as `old -> new` on one line, so any line-based parse can be
+# broken by a path's own content — and a path that arrives mangled matches no
+# glob, which shows up as a gate that silently did not run.
+TMPDIR_TO_CLEAN=''
+cleanup_tmpdir() { [ -z "$TMPDIR_TO_CLEAN" ] || rm -rf "$TMPDIR_TO_CLEAN"; }
+
+collect_worktree() { # base-ref
+  local base=$1 dir rec st path _rename_source
+  dir=$(mktemp -d) || die "cannot create a temporary directory" 2
+  # Via a global rather than an expanded-now trap string: the die()s below exit
+  # from inside this function, and a path with a quote in it would break the
+  # quoting of a `trap "rm -rf '$dir'"`.
+  TMPDIR_TO_CLEAN=$dir
+  trap cleanup_tmpdir EXIT
+
+  # `--diff-filter=d` drops deletions: this is a list of paths that survive the
+  # commit, and a path that is going away has nothing left to validate.
+  git diff -z --name-only --diff-filter=d "$base...HEAD" >"$dir/committed" 2>/dev/null \
+    || die "cannot diff $base...HEAD" 2
+  # `-uall` expands an untracked directory into the files inside it. Without it,
+  # a brand-new `backend/migrations/0002.sql` arrives as the single path
+  # `backend/` and no `**/migrations/**` gate ever fires — the most common miss,
+  # and one that needs no unusual filename at all.
+  git status --porcelain -z -uall >"$dir/worktree" 2>/dev/null \
+    || die "cannot read the working tree status" 2
+
+  while IFS= read -r -d '' path; do
+    add_path "$path"
+  done <"$dir/committed"
+
+  # Porcelain v1 under -z is `XY <path>\0` per entry, where X is the index status
+  # and Y the working-tree status.
+  while IFS= read -r -d '' rec; do
+    [ -n "$rec" ] || continue
+    st=${rec:0:2}
+    path=${rec:3}
+    case $st in
+      R*|C*|?R|?C)
+        # A rename or a copy is two records, and under -z they run new path
+        # first, old path second — the reverse of the default format's
+        # `old -> new`. Consume the second and drop it: it is the path that
+        # stops existing. A copy uses the identical wire format, so it takes
+        # this same branch rather than one of its own.
+        IFS= read -r -d '' _rename_source || true
+        ;;
+    esac
+    # A `D` in either column means the path is gone by the time Step 7 commits,
+    # whether it was deleted from the index or from the working tree.
+    case $st in
+      *D*) continue ;;
+    esac
+    add_path "$path"
+  done <"$dir/worktree"
+
+  cleanup_tmpdir
+  TMPDIR_TO_CLEAN=''
+  trap - EXIT
 }
 
 # Convert a config glob to an anchored POSIX extended regex.
@@ -58,6 +141,10 @@ case "${1:-}" in
     ;;
   --files)
     files=$(cat)
+    ;;
+  --worktree)
+    [ -n "${2:-}" ] || die "--worktree needs a base ref" 2
+    collect_worktree "$2"
     ;;
   *)
     # Silence git's own error output (a ~50-line usage dump on a bad ref, or
