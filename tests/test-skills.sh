@@ -272,7 +272,15 @@ assert_contains "$(cat "$cleanup")" "never require a separate instruction" "clea
 assert_contains "$(cat "$cleanup")" "gh pr view --json state,mergedAt" "cleanup: verifies the PR is merged before removing anything"
 assert_contains "$(cat "$cleanup")" "unknown, not absent" "cleanup: a failed sweep is reported distinctly from an empty one"
 assert_contains "$(cat "$cleanup")" "the command failing for any reason" "cleanup: any gh pr view failure is a stop, not just a non-merged state"
-assert_contains "$(cat "$cleanup")" "already gone" \
+# Scoped to the ExitWorktree bullet itself, not to the whole file and not to Step 3. The
+# needle this replaces was `already gone` against the whole file, which also matched Step 3's
+# unrelated "The remote branch is already gone…" sentence — so the assertion passed with the
+# fix reverted and guarded nothing (#69). Section granularity does not fix it either: that
+# sentence is inside Step 3's own section. The region has to be the bullet.
+assert_guards "$cleanup" \
+  '^- \*\*Step 2 used the native ExitWorktree tool\.\*\*' \
+  '^- \*\*Step 2 fell back to the manual' \
+  'that is "already gone," which is success' \
   "cleanup: Step 3 treats a worktree ExitWorktree already removed as success, not failure"
 # The sweep now reports a merged branch even when it is checked out, which
 # `git branch -d` refuses. Cleanup has to know to land on the base first.
