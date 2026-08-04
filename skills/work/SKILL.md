@@ -210,10 +210,67 @@ Step 8 needs a real PR URL in hand. No PR means Step 9, not Step 8.
 
 ## Step 8: Stop
 
+### Before the stop: did this produce a decision that outlives the ticket?
+
+```bash
+csw-config get adrDir
+```
+
+**Empty — the default — and none of the rest of this subsection runs.** A repo that keeps no
+architecture decision records is never asked the question, and nothing about this dispatch
+changes.
+
+**Non-empty, and it names the directory this repo keeps its ADRs in.** Ask once: did this run
+produce a decision that outlives its ticket — an approach rejected for a reason, a constraint
+discovered the hard way, a rule the next person will otherwise re-break? The PR description is
+where that knowledge goes to die; an ADR is where it survives.
+
+**Most tickets produce nothing durable, and that is the expected answer.** An ADR per feature
+devalues the practice; the discipline is in the rarity. This is a question, not a deliverable —
+asking it is not the same as answering it yes.
+
+When the answer is genuinely yes, write it and push it onto the PR Step 7 just opened:
+
+1. **Read what is already in that directory** for the local convention and for the next number.
+   Where it is empty or absent, the fallback is `<adrDir>/NNNN-kebab-title.md` starting at
+   `0001`, carrying `Date:`, `Status:`, and `Tracking:` naming the tickets, then a `## Context`
+   section explaining the actual failure, the decision, and its consequences. An unset
+   convention is not a reason to skip the question.
+2. **Commit it on its own**, never folded into the implementation commit:
+   ```bash
+   git add "<adrDir>/NNNN-<title>.md"
+   git commit -m "docs: record ADR NNNN — <title>"
+   ```
+   Rejecting an ADR in review is then one revert, rather than surgery on a diff someone wants
+   to keep. That is what makes writing it unattended safe.
+3. **Re-run the gates for that path, not the whole `validate`:**
+   ```bash
+   printf '%s\n' "<adrDir>/NNNN-<title>.md" | csw-gates --files
+   ```
+   Gates are file-triggered, so a repo with a docs gate still gets it. The full suite is a
+   different matter — no code changed between the two commits, so re-running it doubles every
+   ADR's cost and proves nothing.
+4. **Push to the same branch.** The PR is already open; this is a second commit onto it.
+5. **Say so where a human is already looking** — in the report below and in the PR body, naming
+   the ADR and saying plainly that it is **proposed and revertible**. An ADR that merges
+   unnoticed is the one way this goes wrong.
+
+Two dispatches in one night can both claim the same `NNNN`: each branched from the base, and
+neither can see the other's unmerged ADR. **Number from the directory at write time and let
+review renumber the loser.** A collision is not your error and needs no sequencing machinery.
+
+Where an ADR is warranted, it is worth citing from the README of the code it governs rather
+than only from the ADR directory — reachable from where the mistake would be made. That is
+advice, not a gate: an ADR written without touching a README has failed nothing.
+
+A `csw:batch` dispatch does all of this identically. There is nothing here that differs between
+a solo run and an unattended one, and nothing to check in order to tell them apart.
+
 **Hold for review is a hard stop, not a checkpoint to talk past.** Report:
 
 - The PR URL
 - What changed, in a few lines a reviewer can hold in their head
+- Any ADR this run proposed — its path and its title, and that it is proposed, not decided
 - What is worth testing on hardware — the parts CI cannot cover
 
 Then stop. Do not merge. Do not run `csw:merge`. Do not continue because the invoking
@@ -256,3 +313,7 @@ are actually asking to be merged.
 | "They typed a word I don't recognise, I'll get on with the ticket" | An unrecognised modifier is a question, not noise. Name it back and ask. |
 | "It's interactive, so someone is watching — I can merge it" | `interactive` changes planning only. Step 8 is the same hard stop. |
 | "It's interactive, I'll confirm each step as I go" | The questions belong in Step 1. After that it runs like any other dispatch. |
+| "This ticket taught me something, that's an ADR" | Most tickets produce nothing durable. The bar is a decision that outlives the ticket, not a good day's work. |
+| "Nobody is watching, an ADR needs a human to agree" | Write it. Review rejects it — that is where the rarity is enforced, and it is one revert because the ADR is its own commit. |
+| "The ADR may as well ride the implementation commit" | Then rejecting it is surgery on a diff someone wants to keep. Its own commit, always. |
+| "My ADR number collides with another branch's" | Not your error. Number from the directory, say so, and let review renumber it. |

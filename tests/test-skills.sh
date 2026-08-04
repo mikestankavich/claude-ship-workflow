@@ -197,6 +197,44 @@ assert_contains "$work_red_flags" "modifier" \
 assert_contains "$work_red_flags" "interactive" \
   "work: red flags deny that interactive relaxes the hard stop"
 
+# --- work: the ADR pass, at the top of Step 8 ---
+#
+# Nothing in CSW used to ask whether a run produced a decision that outlives its ticket, so
+# every rejected approach and hard-won constraint died in a PR description nobody reads twice.
+# The pass lives at the top of Step 8, before the report, because Step 7 has already opened the
+# PR by then and the ADR rides it as a second commit.
+adr_start='^### Before the stop: did this produce a decision that outlives the ticket\?'
+adr_end='^\*\*Hold for review is a hard stop'
+# A repo that keeps no ADRs must never see any of this, which is what the empty default buys.
+assert_guards "$work" "$adr_start" "$adr_end" \
+  "csw-config get adrDir" "work: the ADR pass is gated on adrDir, so repos without ADRs never see it"
+# The rarity is the practice. An ADR per feature is the failure mode, and the bar has to sit in
+# the prompt text itself — asking the question is not the same as answering it yes.
+assert_guards "$work" "$adr_start" "$adr_end" \
+  "Most tickets produce nothing durable" \
+  "work: the ADR prompt carries its own bar, so the expected answer stays no"
+# Its own commit, so rejecting the ADR in review is one revert rather than surgery on a diff
+# somebody wants to keep. That is what makes always-write safe.
+assert_guards "$work" "$adr_start" "$adr_end" \
+  "docs: record ADR" "work: the ADR lands as its own commit, never folded into the implementation"
+# Gates are file-triggered, so a repo with a docs gate still gets it on the ADR path. Re-running
+# the whole validate would double every ADR's cost against code that did not change.
+assert_guards "$work" "$adr_start" "$adr_end" \
+  "csw-gates --files" "work: the ADR commit re-runs the gates for its path, not the full validate"
+# Two dispatches in one night both number from a directory neither can see the other writing.
+# Without this line a dispatch reads its own collision as a mistake and starts inventing
+# sequencing machinery for a problem review resolves in one rename.
+assert_guards "$work" "$adr_start" "$adr_end" \
+  "renumber" "work: an NNNN collision between concurrent dispatches is tolerated, not engineered around"
+# An ADR that merges unnoticed is the only way always-write goes wrong, so it has to be
+# announced where the human is already looking.
+assert_guards "$work" "$adr_start" "$adr_end" \
+  "proposed and revertible" "work: an ADR is announced as proposed, not as a decision already taken"
+assert_guards "$work" '^\*\*Hold for review is a hard stop' '^Then stop\.' \
+  "ADR" "work: Step 8's report names any ADR the run proposed"
+assert_contains "$work_red_flags" "ADR" \
+  "work: red flags catch an ADR written for a ticket that produced nothing durable"
+
 # --- prep: specs a ticket, touches nothing ---
 prep="$SKILLS/prep/SKILL.md"
 assert_contains "$(cat "$prep")" "csw-ticket normalize" "prep: normalises the ticket reference"
@@ -500,6 +538,20 @@ assert_contains "$batch_step1" "does not pre-check the shape" \
   "batch: shape validation stays in csw-batch-filter, which already names the bad field"
 assert_contains "$batch_red_flags" "trackerCommand" \
   "batch: a red flag catches empty trackerCommand output read as a quiet night"
+
+# --- batch: carrying an ADR back from a night's dispatch ---
+#
+# A subagent writes the ADR itself — solo and batch behave identically — but Step 7 states the
+# returned rows plus Step 2's groups are the whole input to the summary, so an ADR that is not
+# in the contract cannot reach the morning at all.
+assert_guards "$batch" '^### The report contract' '^## Step 6: When a ticket blocks or fails' \
+  '`adr`' "batch: the report contract carries the ADR a dispatch proposed"
+# Its own section rather than a note folded into `summary`: the failure mode being defended
+# against is an ADR merging unnoticed, and a section is what survives a skim.
+assert_contains "$batch_summary" "ADRs proposed" \
+  "batch: the morning summary surfaces the night's ADRs in a section of their own"
+assert_contains "$batch_red_flags" "ADR" \
+  "batch: red flags catch an ADR left buried in a summary line"
 
 # --- prep: recommends by default, asks only what a recommendation cannot settle ---
 # Measured over four tickets: prep asked 4-6 questions on each, and every question carrying a

@@ -15,6 +15,7 @@ DEFAULTS='{
   "validate": "",
   "worktreeDir": ".worktrees",
   "branchPattern": "<type>/<ticket>-<slug>",
+  "adrDir": "",
   "gates": [],
   "batch": { "maxTickets": 3, "singleWriterLabels": ["migration"] }
 }'
