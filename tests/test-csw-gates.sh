@@ -192,4 +192,160 @@ badref_stderr=$(cd "$badref" && "$BIN/csw-gates" totally-bogus-ref-xyz 2>&1 >/de
 assert_eq "$badref_stderr" 'csw-gates: cannot diff totally-bogus-ref-xyz...HEAD' \
   "bad base ref stderr is only the csw-gates message, no git usage block"
 
+# --- --worktree mode -------------------------------------------------------
+#
+# The set of paths that will exist once the current work is committed: the
+# committed diff against <base-ref>, unioned with the working tree. Every case
+# below is one the old `git status --porcelain | cut -c4- | sed 's/.* -> //'`
+# pipeline in csw:work Step 6 got wrong, silently dropping a gate.
+
+MIGRATE="just backend migrate-checksums"
+
+# A repo on main with the two gates these cases exercise. Callers seed and
+# commit whatever main should already contain, then branch themselves.
+wt_repo() {
+  local d
+  d=$(make_repo)
+  write_config "$d" <<'JSON'
+{
+  "gates": [
+    { "when": "**/migrations/**", "run": "just backend migrate-checksums" },
+    { "when": "*.sql",            "run": "just sql-lint" }
+  ]
+}
+JSON
+  printf '%s\n' "$d"
+}
+
+# Commit a five-line .sql at <repo>/<path> on the current branch.
+wt_seed_sql() { # repo path
+  mkdir -p "$(dirname "$1/$2")"
+  printf 'select 1;\nselect 2;\nselect 3;\nselect 4;\nselect 5;\n' >"$1/$2"
+  git -C "$1" add -A
+  git -C "$1" commit -qm "seed $2"
+}
+
+# 1. An untracked file inside a brand-new untracked directory. The common miss:
+#    without `-uall` git collapses this to `?? newdir/` and `**/migrations/**`
+#    never fires. No unusual filename required.
+r=$(wt_repo)
+git -C "$r" checkout -q -b feat/probe
+mkdir -p "$r/backend/migrations"
+printf 'select 1;\n' >"$r/backend/migrations/0002.sql"
+assert_eq "$(in_dir "$r" "$BIN/csw-gates" --worktree main)" "$MIGRATE" \
+  "--worktree: untracked file in a brand-new untracked directory fires its gate"
+
+# 2. An untracked path containing a space. git C-style-quotes any path with a
+#    space or a non-ASCII byte, and the quotes match no glob.
+r=$(wt_repo)
+git -C "$r" checkout -q -b feat/probe
+printf 'select 1;\n' >"$r/plain space.sql"
+assert_eq "$(in_dir "$r" "$BIN/csw-gates" --worktree main)" "just sql-lint" \
+  "--worktree: an untracked path containing a space fires its gate"
+
+# 3. A staged rename whose destination contains a literal ' -> ' — the repro on
+#    the ticket. Under -z the record order is new path first, old path second.
+r=$(wt_repo)
+git -C "$r" checkout -q -b feat/probe
+wt_seed_sql "$r" m/a.sql
+mkdir -p "$r/backend/migrations"
+git -C "$r" mv m/a.sql "backend/migrations/weird -> evil.sql"
+assert_eq "$(in_dir "$r" "$BIN/csw-gates" --worktree main)" "$MIGRATE" \
+  "--worktree: staged rename to a path containing ' -> ' fires its gate"
+
+# 4. The same rename left unstaged. Nothing has run `git add` at Step 6, so this
+#    is the shape that actually shows up: ' D old' plus '?? new', no R record.
+r=$(wt_repo)
+git -C "$r" checkout -q -b feat/probe
+wt_seed_sql "$r" m/a.sql
+mkdir -p "$r/backend/migrations"
+mv "$r/m/a.sql" "$r/backend/migrations/weird -> evil.sql"
+assert_eq "$(in_dir "$r" "$BIN/csw-gates" --worktree main)" "$MIGRATE" \
+  "--worktree: unstaged rename to a path containing ' -> ' fires its gate"
+
+# 5. A staged copy whose destination contains ' -> '. Under -z a copy is the
+#    same two-record shape as a rename, so it must take the same branch.
+r=$(wt_repo)
+wt_seed_sql "$r" m/a.sql
+git -C "$r" config status.renames copies
+git -C "$r" checkout -q -b feat/probe
+mkdir -p "$r/backend/migrations"
+cp "$r/m/a.sql" "$r/backend/migrations/weird -> evil.sql"
+printf 'select 6;\n' >>"$r/m/a.sql"   # -C only finds copies of files the same change touches
+git -C "$r" add -A
+assert_eq "$(in_dir "$r" "$BIN/csw-gates" --worktree main)" "$MIGRATE" \
+  "--worktree: staged copy to a path containing ' -> ' fires its gate"
+
+# 6. A deleted path contributes nothing: it will not exist once this commits,
+#    so there is nothing left for a gate to validate against it.
+r=$(wt_repo)
+wt_seed_sql "$r" backend/migrations/0001.sql
+git -C "$r" checkout -q -b feat/probe
+git -C "$r" rm -q backend/migrations/0001.sql
+assert_eq "$(in_dir "$r" "$BIN/csw-gates" --worktree main)" "" \
+  "--worktree: a deleted path does not fire its gate"
+
+# ...including a deletion that is only committed on the branch, which the
+# committed half must drop too.
+r=$(wt_repo)
+wt_seed_sql "$r" backend/migrations/0001.sql
+git -C "$r" checkout -q -b feat/probe
+git -C "$r" rm -q backend/migrations/0001.sql
+git -C "$r" commit -qm "drop migration"
+assert_eq "$(in_dir "$r" "$BIN/csw-gates" --worktree main)" "" \
+  "--worktree: a path deleted in a commit on the branch does not fire its gate"
+
+# 7. A literal newline in a path cannot be represented in the line-based
+#    matching csw-gates does, and silently skipping a gate is the failure this
+#    program exists to prevent. Fail loudly, exit 2.
+r=$(wt_repo)
+git -C "$r" checkout -q -b feat/probe
+printf 'select 1;\n' >"$r/$(printf 'we\nird').sql"
+assert_status 2 "--worktree: a path containing a newline exits 2" -- \
+  sh -c "cd '$r' && '$BIN/csw-gates' --worktree main"
+newline_stderr=$(in_dir "$r" "$BIN/csw-gates" --worktree main 2>&1 >/dev/null)
+assert_contains "$newline_stderr" \
+  'csw-gates: path contains a newline, which the line-based gate matching cannot represent:' \
+  "--worktree: the newline failure names itself"
+
+# The committed half is still there: a change committed on the branch and then
+# left alone fires its gate with a clean working tree.
+r=$(wt_repo)
+git -C "$r" checkout -q -b feat/probe
+wt_seed_sql "$r" backend/migrations/0003.sql
+assert_eq "$(in_dir "$r" "$BIN/csw-gates" --worktree main)" "$MIGRATE" \
+  "--worktree: a change committed on the branch fires its gate"
+
+# Both halves at once, deduped down to the single command they share.
+r=$(wt_repo)
+git -C "$r" checkout -q -b feat/probe
+wt_seed_sql "$r" backend/migrations/0003.sql
+printf 'select 1;\n' >"$r/backend/migrations/0004.sql"
+assert_eq "$(in_dir "$r" "$BIN/csw-gates" --worktree main)" "$MIGRATE" \
+  "--worktree: committed and uncommitted halves are unioned"
+
+# A clean tree with nothing on the branch fires nothing, and still exits 0.
+r=$(wt_repo)
+git -C "$r" checkout -q -b feat/probe
+assert_eq "$(in_dir "$r" "$BIN/csw-gates" --worktree main)" "" \
+  "--worktree: a clean tree with no branch commits produces no output"
+assert_status 0 "--worktree: a clean tree still exits 0" -- \
+  sh -c "cd '$r' && '$BIN/csw-gates' --worktree main"
+
+# A bad base ref fails the same way it does in diff mode, and a missing base ref
+# is a usage error rather than a diff against the empty string.
+r=$(wt_repo)
+assert_status 2 "--worktree: a bad base ref exits 2" -- \
+  sh -c "cd '$r' && '$BIN/csw-gates' --worktree totally-bogus-ref-xyz"
+wt_badref_stderr=$(in_dir "$r" "$BIN/csw-gates" --worktree totally-bogus-ref-xyz 2>&1 >/dev/null)
+assert_eq "$wt_badref_stderr" 'csw-gates: cannot diff totally-bogus-ref-xyz...HEAD' \
+  "--worktree: a bad base ref reports only the csw-gates message"
+assert_status 2 "--worktree without a base ref exits 2" -- \
+  sh -c "cd '$r' && '$BIN/csw-gates' --worktree"
+
+# --files keeps its stdin contract exactly as it was: it is the escape hatch and
+# the test seam, not something --worktree replaced.
+assert_eq "$(printf 'backend/migrations/0002.sql\n' | in_dir "$r" "$BIN/csw-gates" --files)" \
+  "$MIGRATE" "--files still reads a newline-separated list from stdin"
+
 report

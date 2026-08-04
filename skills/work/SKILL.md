@@ -155,25 +155,30 @@ a series of confirmations.
 ## Step 6: Validate
 
 ```bash
-csw-config get validate     # run whatever this prints; empty means the repo declared none
-{ git diff --name-only "<baseBranch>...HEAD"; git status --porcelain | cut -c4- | sed 's/.* -> //'; } \
-  | csw-gates --files        # run every line it prints
+csw-config get validate            # run whatever this prints; empty means the repo declared none
+csw-gates --worktree "<baseBranch>"  # run every line it prints
 ```
 
-Step 7, not this one, is where `git add -A && git commit` happens. A `csw-gates <baseBranch>`
-diff against the merge base only sees committed history, so anything written in Step 5 but not
-yet committed — a new migration file, say — is invisible to it and no gate fires on it. Feed
-`csw-gates --files` both sources: the committed diff against `<baseBranch>`, and
-`git status --porcelain` for whatever is still sitting uncommitted in the working tree. Either
-source alone misses real changes; together they cover the whole tree as it will look after
-Step 7 commits it.
+Step 7, not this one, is where `git add -A && git commit` happens. A plain
+`csw-gates <baseBranch>` diffs against the merge base and so only sees committed history:
+anything written in Step 5 but not yet committed — a new migration file, say — is invisible to
+it and no gate fires on it. `--worktree` is the mode for exactly this moment. It unions the
+committed diff against `<baseBranch>` with the working tree and reports the gates for the tree
+as it will look after Step 7 commits it.
 
-`git status --porcelain`'s short format is two status letters, a space, then the path —
-`cut -c4-` strips exactly that three-character prefix. A rename reads `R  old -> new`, which
-after `cut -c4-` is the single string `old -> new`; that would not match any real gate glob by
-coincidence, so `sed 's/.* -> //'` reduces it to just `new` — the path that will actually exist
-once this commits. The old path is deliberately dropped rather than also emitted: it is about
-to stop existing, so there is nothing left for a gate to validate against it.
+Do not hand-roll that union out of `git status` in the shell. `--worktree` reads git
+NUL-delimited precisely because the line-based forms cannot be parsed safely: git C-style-quotes
+any path containing a space or a non-ASCII byte, writes a rename on one line as `old -> new`,
+and collapses a brand-new untracked directory to the directory alone — so a new
+`backend/migrations/0002.sql` arrives as `backend/` and `**/migrations/**` never fires. Each of
+those reaches a matcher mangled or not at all, which shows up as a gate that silently did not
+run: the exact failure this step exists to prevent.
+
+What comes out is the set of paths that will exist once this commits. Deletions contribute
+nothing, since a path that is going away has nothing left to validate. A rename or a copy
+contributes its destination only, for the same reason. A path containing a literal newline
+cannot be represented in line-based matching at all, so it is a hard error rather than a
+skipped gate.
 
 Gates are gates. If one fails, fix it and re-run. If you cannot fix it, you are in Step 9.
 
