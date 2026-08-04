@@ -77,11 +77,17 @@ gh issue view <number> --comments
 
 For `linear`, list the issue's comments through the Linear MCP tools.
 
-If there is one, it is part of the brief — a first-pass spec, the questions prep thought had
-to be answered before this could run unattended, and anything the ticket asserts that the
+If there is one, it is part of the brief — a first-pass spec, the decisions prep made with the
+reasoning behind each, whatever it could not settle, and anything the ticket asserts that the
 codebase contradicts. Read the replies underneath it too, because that is where the answers
 are:
 
+- **A decision prep recorded is a decision.** It comes with its reasoning so you can see the
+  precedent it followed; build on it. Re-deciding it is the same wasted conversation as
+  re-opening an answered question. Overturning one takes something the reasoning did not
+  account for — say so on the ticket if you find it.
+- **`## Open questions` reading `_None._` means nothing is outstanding.** A missing section is
+  not the same claim: treat it as an older prep comment and read the questions out of the body.
 - **A prep question that has since been answered in the thread is a decision.** Take it and
   move on. Re-opening it spends the dispatch on a conversation that already happened, and the
   answer in the thread outranks whatever the description said before it was asked.

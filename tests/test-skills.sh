@@ -401,4 +401,58 @@ assert_contains "$(cat "$batch")" "effective cap and where it came from" \
 assert_contains "$(cat "$batch")" "A filter failure in a dry run is a failure, not an empty plan" \
   "batch: a dry run cannot launder a failed selection into a quiet night"
 
+# --- prep: recommends by default, asks only what a recommendation cannot settle ---
+# Measured over four tickets: prep asked 4-6 questions on each, and every question carrying a
+# recommendation was answered by taking the recommendation. Those questions carried no
+# information — they were a confirmation step billed to a human on every ticket. So the test
+# for asking is mechanical and prep can apply it to itself: can a recommendation be formed?
+assert_contains "$(cat "$prep")" '(Recommended)' \
+  "prep: forming a recommendation at all is the test for not asking"
+assert_contains "$(cat "$prep")" "Question count is a quality signal" \
+  "prep: says explicitly that asking fewer is better, against the natural surface-them-all pull"
+
+# The two branches that survive. Branch two is about blast radius rather than confidence, and
+# has to name a class of consequence — left vague it reabsorbs everything branch one excluded
+# and prep is back to six questions a ticket.
+assert_contains "$(cat "$prep")" "No recommendation can be formed" \
+  "prep: names the first branch that legitimately asks"
+assert_contains "$(cat "$prep")" "cannot be walked back by editing a file" \
+  "prep: bounds the second branch to a class of consequence, not a feeling of importance"
+
+# The answers have to land in the same comment they were asked in. A decision recorded
+# without its reasoning is indistinguishable from a guess, which is the thing prep forbids.
+assert_contains "$(cat "$prep")" "## Decisions" \
+  "prep: the comment carries the decisions, not only what prep could not settle"
+assert_contains "$(cat "$prep")" "the reasoning that made it a decision" \
+  "prep: a recorded decision carries the reasoning a human would need to overturn it"
+# An absent section is not a signal. "Nothing left open" is, and a dispatch reads it back.
+assert_contains "$(cat "$prep")" "_None._" \
+  "prep: an empty open-questions section says so rather than disappearing"
+
+# Prep is run with the person who can answer sitting there — that is the design centre, not a
+# variant of it. Framed the other way round the skill defers every surviving question to a
+# comment someone reads tomorrow, which is the day of latency prep exists to remove.
+assert_contains "$(cat "$prep")" "Prep is an interactive command" \
+  "prep: the run with a human present is the norm, not the exception"
+assert_contains "$(cat "$prep")" "dispatchable" \
+  "prep: names the state a run has to leave the ticket in"
+
+# Recommending to a human who can reject it needs a human. Without one — a subagent, a column
+# of tickets prepped in one pass — the questions that survive triage stay open.
+assert_contains "$(cat "$prep")" "AskUserQuestion" \
+  "prep: puts the surviving questions to the human who is actually sitting there"
+assert_contains "$(cat "$prep")" "nobody is there to answer" \
+  "prep: falls back to leaving questions open when there is no human in the room"
+# Several prep sessions at once is the interactive path, not the fallback — the human is in
+# every one of them. The only thing that actually collides is two sessions on one ticket,
+# which races two markers into a thread whose supersede rule assumes one writer.
+assert_contains "$(cat "$prep")" "One ticket per session" \
+  "prep: parallel sessions are safe per ticket, and the collision is naming the same ticket twice"
+
+# Both directions have to be answered where an agent looks when it is about to rationalise.
+assert_contains "$prep_red_flags" "nobody watching" \
+  "prep: red flags keep the ban on guessing, bounded to the unattended case"
+assert_contains "$prep_red_flags" "so I'll ask" \
+  "prep: red flags catch the reverse failure, asking rather than recommending"
+
 report
