@@ -5,6 +5,103 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-08-04
+
+The batch release. 1.0.0 could take one ticket to a pull request; 1.1.0 is the work needed
+before a loop of them can run overnight without a human in the room — a spec pass in front of
+the dispatch, a way to see the selection before it fires, a supervised flavour for the tickets
+that deserve one, isolation between dispatches, and somewhere for a decision to live once the
+ticket that produced it is closed.
+
+### Added
+- **`/csw:prep` — spec a ticket before it is dispatched, with no repo side effects.** A batch
+  loop only compounds after a failure: a ticket blocks, the question lands on the ticket, and
+  the next dispatch starts from a better brief. Prep moves that discovery in front of the
+  dispatch, where it costs a comment rather than a night. It opens no worktree, no branch and
+  no PR, and leaves the ticket in Todo; its output is a single `**CSW prep**` comment carrying
+  a first-pass spec, the decisions it made with the reasoning behind each, and whatever it
+  could not settle. Prep is interactive by design — you typed it and you are sitting there —
+  and it triages on a test it can apply to itself: if an option can be marked
+  "(Recommended)", that is the answer, so decide it and record why. Only two branches survive
+  to be asked: no recommendation can be formed, or the cost of being wrong is paid outside
+  this repo. Measured over four tickets, that turned 4–6 questions each into the one or two
+  that genuinely needed a human. Several sessions prep in parallel safely, one ticket each;
+  two sessions given the *same* ticket is the collision, because two markers race into one
+  thread. (#73, #95)
+- **`/csw:work <ticket> interactive`.** The word was undefined behaviour — `$ARGUMENTS`
+  expanded it into the skill unexplained, and whether it beat the autonomous directive was
+  unpredictable. It now brainstorms against the ticket before planning and waits for the
+  answers. It changes planning only: the same validation, the same gates, the same hard stop
+  at an open PR. An unrecognised modifier is now named back and asked about rather than
+  silently discarded. (#72)
+- **`/csw:batch --dry-run`.** Prints the selection and stops — no worktree, no branch, no PR.
+  Pass a lower cap alongside it (`/csw:batch 2 --dry-run`) to see where a smaller batch would
+  cut. Makes the loop observable before it dispatches. (#71)
+- **`trackerCommand` config key** — an escape hatch from tracker MCP for `/csw:batch` only.
+  There is no official Linear CLI and this plugin's dependency set stays git, `gh` and `jq`,
+  but for a whole column the difference is real: one command returning exactly the array
+  `csw-batch-filter` consumes, versus several MCP calls plus in-context reshaping, which is
+  where an agent introduces errors. It replaces the fetch, not the tracker — `tracker` must
+  still be set correctly, and the command must be read-only. Empty by default. (#74)
+- **`adrDir` config key — ask whether the work outlives its ticket.** Nothing in CSW ever
+  asked whether a run produced knowledge worth keeping; a rejected approach or a
+  hard-won constraint landed in a PR description nobody reads twice, and unattended batching
+  made it worse. Set it and `/csw:work` Step 8 asks once, before its hard stop, whether the
+  run produced a durable decision — writing the ADR into that directory and pushing it onto
+  the already-open PR as its own commit, gated on its own path, announced as proposed. Batch's
+  report contract grows an `adr` field and the morning summary a section of its own, because
+  an ADR that merges unnoticed is the one way writing them unattended goes wrong. Empty by
+  default, so repos without ADRs see none of this. (#75)
+- **`csw-gates --worktree <base-ref>`** — derives the Step 6 file list itself from
+  NUL-delimited git output. `--files` keeps its stdin contract as an escape hatch and test
+  seam. (#70)
+- **`assert_guards` test helper** — scopes a needle to the region of a skill file that
+  documents the behaviour, so reverting the behaviour deletes the region and the assertion
+  goes red. (#69)
+
+### Changed
+- **`/csw:batch` dispatches each ticket to a fresh subagent.** Step 4 previously ran every
+  `/csw:work` dispatch in the controlling session, so ticket two inherited ticket one's plan,
+  its diff and its dead ends — the worktrees were isolated, the mind driving them was not,
+  which contradicts the clear-before-every-dispatch discipline the whole workflow rests on.
+  Each ticket now goes to a fresh subagent, dispatched synchronously in order, briefed with
+  the ticket reference and nothing else. The controller keeps only loop state and the row each
+  dispatch returns, so the morning summary is assembled from results rather than reconstructed
+  from a transcript, and a failed ticket is one row in that summary instead of the end of the
+  night. (#78)
+- **`csw-batch-filter`'s output grows a third key, `belowCap`.** Cap overflow is now reported
+  separately from exclusions: a ticket the cap pushed out is a ticket that will run tomorrow,
+  and reporting it in the same bucket as one excluded for a reason misrepresents the night.
+  This is a change to a contract released in 1.0.0 — it is an internal tool with a single
+  in-repo consumer, so practical impact is nil, but it is a shape change and belongs here
+  rather than in a footnote. (#71)
+- **`/csw:work` reads the `**CSW prep**` comment as part of the brief.** A decision prep
+  recorded is a decision to build on. A prep question answered in the thread is a decision
+  too. A prep question still unanswered is a strong signal the ticket is not ready to run
+  unattended, and routes to Step 9's draft path rather than to a guess — except on an
+  `interactive` run, where the human who can answer is present. (#73)
+
+### Fixed
+- **Step 6 dropped gates for three separate classes of path, each producing a gate that
+  silently did not run.** The union of the committed diff and the working tree was hand-rolled
+  in shell as `git status --porcelain | cut -c4- | sed 's/.* -> //'`. Git C-style-quotes any
+  path containing a space or a non-ASCII byte, so the quotes reached the matcher and matched
+  no glob. The greedy `sed` split a rename on the *last* ` -> ` in the line, which is inside
+  the destination when the destination itself contains that substring. And without `-uall`, a
+  brand-new untracked directory collapsed to the directory alone, so a new
+  `backend/migrations/0002.sql` arrived as `backend/` and `**/migrations/**` never fired — no
+  unusual filename required, and precisely the case Step 6's working-tree half exists to
+  cover. The derivation moved into `csw-gates --worktree`, where no path is ever split on its
+  own content: deletions contribute nothing, renames and copies contribute their destination
+  only, and a path containing a literal newline is a hard exit 2 rather than a skipped gate.
+  (#70)
+- **24 assertions in `tests/test-skills.sh` guarded nothing.** Their needles also occurred
+  outside the behaviour they were meant to protect — most often in the `## Red flags` table,
+  where every skill restates its load-bearing rules by design — so the assertion passed with
+  the behaviour reverted. Measured on a scratch copy with each guard's region deleted: all 25
+  guards now fail on that revert, and for 18 of them the old whole-file needle survived it.
+  Those were live false positives, not defensive changes. (#69)
+
 ## [1.0.3] - 2026-08-03
 
 ### Fixed
