@@ -1,6 +1,7 @@
 {
   "ticketPrefix": "TRA",
   "tracker": "linear",
+  "trackerCommand": "",
   "baseBranch": "main",
   "defaultType": "feat",
   "validate": "just validate",

@@ -8,6 +8,12 @@ assert_eq "$(cd "$repo" && "$BIN/csw-config" get worktreeDir)" ".worktrees" "def
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get baseBranch)" "main" "default baseBranch"
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get defaultType)" "feat" "default defaultType"
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get ticketPrefix)" "" "default ticketPrefix is empty"
+# Empty means "ask the tracker named by `tracker`", which is the behaviour every existing
+# config already has. A non-empty default would silently shell out on someone else's repo.
+# The exit-status assertion is the load-bearing half: an absent key exits 2 and its command
+# substitution is also the empty string, so assert_eq alone would pass without the default.
+assert_eq "$(cd "$repo" && "$BIN/csw-config" get trackerCommand)" "" "default trackerCommand is empty"
+assert_status 0 "trackerCommand is a known key, not an absent one" -- in_dir "$repo" "$BIN/csw-config" get trackerCommand
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get branchPattern)" "<type>/<ticket>-<slug>" "default branchPattern"
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get gates)" "[]" "default gates is an empty array"
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get batch.maxTickets)" "3" "default batch.maxTickets"
@@ -19,6 +25,7 @@ write_config "$repo" <<'JSON'
 {
   "ticketPrefix": "TRA",
   "tracker": "linear",
+  "trackerCommand": "linear-cli todo --json",
   "validate": "just validate",
   "worktreeDir": ".claude/worktrees",
   "batch": { "maxTickets": 4 }
@@ -26,6 +33,10 @@ write_config "$repo" <<'JSON'
 JSON
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get ticketPrefix)" "TRA" "override ticketPrefix"
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get validate)" "just validate" "override validate"
+# trackerCommand replaces only the fetch, so a repo setting it keeps `tracker` too — the
+# filter's own priority ranking still reads `tracker`.
+assert_eq "$(cd "$repo" && "$BIN/csw-config" get trackerCommand)" "linear-cli todo --json" "override trackerCommand"
+assert_eq "$(cd "$repo" && "$BIN/csw-config" get tracker)" "linear" "trackerCommand does not displace tracker"
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get worktreeDir)" ".claude/worktrees" "override worktreeDir"
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get baseBranch)" "main" "untouched key keeps its default"
 assert_eq "$(cd "$repo" && "$BIN/csw-config" get batch.maxTickets)" "4" "nested override"
